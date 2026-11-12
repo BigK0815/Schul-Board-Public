@@ -622,11 +622,11 @@ class Window:
                 self.status.set(message)
                 if result == 'available':
                     if messagebox.askyesno('Schul-Board – Update verfügbar',
-                                           message + '\\n\\nRelease-Seite im Browser öffnen?'):
+                                           message + '\n\nRelease-Seite im Browser öffnen?'):
                         webbrowser.open(url)
                 elif result == 'unavailable':
                     if messagebox.askyesno('Schul-Board – Updateprüfung',
-                                           message + '\\n\\nGitHub im Browser öffnen?'):
+                                           message + '\n\nGitHub im Browser öffnen?'):
                         webbrowser.open(url)
                 else:
                     messagebox.showinfo('Schul-Board – Updateprüfung', message)
