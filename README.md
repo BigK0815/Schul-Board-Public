@@ -1,5 +1,7 @@
 # Schul-Board
 
+<img src="schullogo.png" alt="Schul-Board-Logo" width="96">
+
 Schul-Board zeigt Stunden- und Vertretungspläne aus **beste.schule** sowie Hinweise und PDF-Aushänge auf einem Bildschirm an. Die Verwaltung läuft unter Windows, die Anzeige im Browser.
 
 ## Installation und Einrichtung
