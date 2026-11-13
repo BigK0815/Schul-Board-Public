@@ -11,7 +11,7 @@ import requests
 from flask import Flask, jsonify, render_template_string, Response, abort, send_file
 
 BASE = 'https://beste.schule/api'
-SETTINGS = {'refresh_seconds':300,'switch_seconds':15,'course_seconds':4,'cutoff_hour':15,'start_grade':5,'display_rows':2,'pdf_folder':str(Path.home() / 'StundenplanBoard_Infoboard'),'pdf_seconds':12,'group_mappings':{},'teacher_mappings':{},'room_mappings':{},'school_name':'Meine Schule','school_logo':'','automatic_group_mapping':True}
+SETTINGS = {'refresh_seconds':300,'switch_seconds':15,'course_seconds':4,'cutoff_hour':15,'start_grade':5,'display_rows':2,'pdf_folder':'','pdf_seconds':12,'group_mappings':{},'group_name_display':{},'lesson_times':{},'teacher_mappings':{},'room_mappings':{},'school_name':'Musterschule','school_logo':'','automatic_group_mapping':False}
 
 app = Flask(__name__)
 cache = {'at': 0, 'data': None}
@@ -39,11 +39,11 @@ main{height:calc(100dvh - clamp(54px,8.4vh,90px));display:grid;grid-template-col
 #left{--day-gap:clamp(14px,1.4vw,30px)}
 .level{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:var(--day-gap);min-width:0;min-height:0;background:#fff;border-radius:10px;padding:clamp(3px,.35vw,7px);box-shadow:0 1px 5px #a4bfd144}
 .grade-label{background:var(--navy);color:white;border-radius:7px;display:flex;align-items:center;justify-content:center;writing-mode:vertical-rl;transform:none;rotate:180deg;font-size:clamp(10px,1.1vw,19px);font-weight:700;white-space:nowrap;overflow:hidden}
-.day-panel{display:grid;grid-template-columns:clamp(17px,1.55vw,29px) minmax(0,1fr);min-width:0;min-height:0;overflow:hidden}
-.hour-column{display:grid;grid-template-rows:clamp(24px,4.3vh,41px) repeat(8,minmax(0,1fr));min-height:0}
+.day-panel{display:grid;grid-template-columns:var(--hour-column-width) minmax(0,1fr);min-width:0;min-height:0;overflow:hidden}
+.hour-column{display:grid;grid-template-rows:clamp(24px,4.3vh,41px) repeat(var(--period-count,8),minmax(0,1fr));min-height:0}
 .hour-column .hour{background:#fff;border:1px solid var(--grid);display:flex;align-items:center;justify-content:center;font-size:var(--font);font-weight:700;min-height:0}
 .class-grid{display:grid;grid-template-columns:repeat(var(--class-count),minmax(0,1fr));gap:clamp(2px,.25vw,5px);min-height:0;min-width:0}
-.class-col{display:grid;grid-template-rows:clamp(24px,4.3vh,41px) repeat(8,minmax(0,1fr));min-width:0;min-height:0;overflow:hidden}
+.class-col{display:grid;grid-template-rows:clamp(24px,4.3vh,41px) repeat(var(--period-count,8),minmax(0,1fr));min-width:0;min-height:0;overflow:hidden}
 .class-name{background:var(--navy);color:white;text-align:center;font-size:clamp(11px,1.22vw,23px);font-weight:700;display:flex;align-items:center;justify-content:center;min-width:0;border-radius:5px 5px 0 0}
 .slot{border:1px solid var(--grid);border-top:0;display:flex;align-items:center;justify-content:center;min-width:0;min-height:0;overflow:hidden;background:#fff;text-align:center}
 /* Jede Stunde bekommt über beide Tage und die Stundennummer dieselbe Zeilenfarbe. */
@@ -63,7 +63,7 @@ main{height:calc(100dvh - clamp(54px,8.4vh,90px));display:grid;grid-template-col
 .subject,.compact strong{font-size:var(--font);font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:0 1 auto;line-height:1.05}
 .detail,.compact small{font-size:var(--small);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.05}
 .compact{flex-direction:column;justify-content:center}.compact strong,.compact small{max-width:100%}
-.changed{background:#ffe398!important}.canceled{background:#ffb9c1!important}.slot.canceled{position:relative}.slot.canceled::before,.slot.canceled::after{content:'';position:absolute;left:0;top:50%;width:100%;height:2px;background:#ba2536;pointer-events:none;z-index:2;transform-origin:center}.slot.canceled::before{transform:rotate(19deg)}.slot.canceled::after{transform:rotate(-19deg)}
+.changed{background:#ffedbf!important}.canceled{background:#ffd6dc!important}.slot.canceled{position:relative}.cancel-cross{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:2}
 #infoboard{display:flex;flex-direction:column;min-width:0;min-height:0;background:white;border-radius:10px;overflow:hidden;box-shadow:0 1px 6px #a4bfd144}
 #infohead{height:clamp(30px,5vh,50px);flex:0 0 auto;display:flex;align-items:center;justify-content:center;background:var(--navy);color:white;border-radius:7px;font-weight:700;font-size:clamp(12px,1.35vw,25px)}
 #infonote{display:none;width:100%;height:100%;padding:clamp(12px,1.5vw,28px);flex-direction:column;align-items:stretch;justify-content:flex-start;text-align:left;gap:clamp(12px,2vh,26px);background:#f2f8ff;color:#123d64;overflow:hidden;box-sizing:border-box}
@@ -79,11 +79,12 @@ main{height:calc(100dvh - clamp(54px,8.4vh,90px));display:grid;grid-template-col
 #copyright{position:fixed;right:12px;bottom:3px;z-index:10;font-size:clamp(11px,.75vw,15px);color:#718397;opacity:.78;pointer-events:none;white-space:nowrap;text-shadow:0 1px 2px #fff;background:rgba(255,255,255,.72);padding:1px 4px;border-radius:3px}
 .error{background:#ffdde2;color:#8a1423;padding:12px}
 @media(max-width:1000px){:root{--font:clamp(7px,.78vw,12px);--small:clamp(6px,.6vw,9px)}.mini{flex-direction:row;justify-content:flex-start;gap:2px}.grade-label{font-size:10px}header h1{font-size:clamp(15px,2vw,22px)}}
-@media(max-height:700px){.class-col,.hour-column{grid-template-rows:22px repeat(8,minmax(0,1fr))}.mini{flex-direction:row;gap:2px;justify-content:flex-start}}
+@media(max-height:700px){.class-col,.hour-column{grid-template-rows:22px repeat(var(--period-count,8),minmax(0,1fr))}.mini{flex-direction:row;gap:2px;justify-content:flex-start}}
 
 /* Freigegebenes Layout: Tage nebeneinander, zwei Jahrgaenge untereinander. */
-#left{--day-gap:clamp(16px,1.6vw,34px)}
+#left{--day-gap:clamp(16px,1.6vw,34px);--hour-column-width:clamp(17px,1.55vw,29px)}
 #dayhead{grid-template-columns:repeat(2,minmax(0,1fr));column-gap:var(--day-gap)}
+#tomorrowTitle{margin-inline-start:var(--hour-column-width)}
 .level{grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--day-gap)}
 .hidden-hours .hour{visibility:hidden;border-color:transparent;background:transparent!important}
 .hidden-hours{visibility:hidden}
@@ -94,10 +95,11 @@ main{height:calc(100dvh - clamp(54px,8.4vh,90px));display:grid;grid-template-col
 .slot .mini.wrap{flex-direction:column;align-items:flex-start;justify-content:center;gap:0}
 .slot .mini.wrap .subject,.slot .mini.wrap .detail{max-width:100%;overflow:hidden;text-overflow:ellipsis}
 .slot.coupled:not(.changed):not(.canceled){background:#cdebf8}
-.slot.changed{background:#ffe398!important}.slot.canceled{background:#ffb9c1!important}
+.slot.changed{background:#ffedbf!important}.slot.canceled{background:#ffd6dc!important}
+.slot.current-period:not(.canceled),.hour-column .hour.current-period{background:#79e64e!important}
 </style></head><body>
 <header><img src="/assets/schullogo.png" alt="Schullogo"><h1>__SCHOOL_NAME__</h1><div id="clock"></div></header>
-<main><div id="left"><div id="dayhead"><div class="date-head" id="todayTitle">Heute</div><div class="date-head" id="tomorrowTitle">Morgen</div></div><div id="board"></div></div><aside id="infoboard"><div id="infohead">Infos &amp; Termine</div><div id="infocontent"><div id="infonote"></div><img id="infoimage" alt="Informationen aus PDF"><div id="infoempty">Keine PDF-Dateien im Info-Ordner</div></div></aside></main><div id="copyright">© 2026 Schul-Board · StundenplanBoard</div>
+<main><div id="left"><div id="dayhead"><div class="date-head" id="todayTitle">Heute</div><div class="date-head" id="tomorrowTitle">Morgen</div></div><div id="board"></div></div><aside id="infoboard"><div id="infohead">Infos &amp; Termine</div><div id="infocontent"><div id="infonote"></div><img id="infoimage" alt="Informationen aus PDF"><div id="infoempty">Keine PDF-Dateien im Info-Ordner</div></div></aside></main><div id="copyright">(c) 2026 Robert Kettmann</div>
 <script>
 const BOARD_SETTINGS=__BOARD_SETTINGS_JSON__;
 let data=null,index=__START_INDEX__,lastChange=Date.now(),coursePhase=0,notePhase=0;
@@ -105,6 +107,13 @@ const levels=[5,6,7,8,9,10];
 function gradeOf(name){const m=String(name).match(/^(10|[1-9])(?=\\D|$)/);return m?Number(m[1]):null;}
 const weekdays=['Sonntag','Montag','Dienstag','Mittwoch','Donnerstag','Freitag','Samstag'];
 function dateLabel(iso){let d=new Date(iso+'T12:00:00');return weekdays[d.getDay()]+', '+iso.slice(8,10)+'.'+iso.slice(5,7)+'.';}
+function dayHeading(iso, now){
+ const day=new Date(iso+'T12:00:00');
+ const tomorrow=new Date(now.getFullYear(),now.getMonth(),now.getDate()+1);
+ const sameDay=(a,b)=>a.getFullYear()===b.getFullYear()&&a.getMonth()===b.getMonth()&&a.getDate()===b.getDate();
+ const prefix=sameDay(day,now)?'Heute – ':sameDay(day,tomorrow)?'Morgen – ':'';
+ return prefix+dateLabel(iso);
+}
 function escapeHtml(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function cell(lessons,day,n){
  const rowClass=n%2===0?'row-odd':'row-even';
@@ -112,10 +121,13 @@ function cell(lessons,day,n){
  // Bei parallelen Kursen direkt die Kurse rotieren, niemals eine Zusammenfassung anzeigen.
  const l=lessons[coursePhase%lessons.length];
  const cls=l.status==='canceled'?'canceled':l.changed?'changed':lessons.length>1?'coupled':'';
- const subject=l.subject;
+ const subject=l.display_label ?? l.subject;
  const detail=[l.teacher,l.room].filter(Boolean).join('/');
- const full=[l.subject,detail].filter(Boolean).join(' ');
- return `<div class="slot ${rowClass} ${cls}" title="${escapeHtml(full)}"><div class="mini"><span class="subject">${escapeHtml(subject)}</span><span class="detail">${escapeHtml(detail)}</span></div></div>`;
+ const full=[subject,detail].filter(Boolean).join(' ');
+ const cross=cls==='canceled'
+  ? '<svg class="cancel-cross" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path d="M0 0L100 100M0 100L100 0" fill="none" stroke="#ba2536" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>'
+  : '';
+ return `<div class="slot ${rowClass} ${cls}" title="${escapeHtml(full)}"><div class="mini"><span class="subject">${escapeHtml(subject)}</span><span class="detail">${escapeHtml(detail)}</span></div>${cross}</div>`;
 }
 // Passt die Schrift nur dann an, wenn der gesamte Eintrag sonst nicht in die Zelle passt.
 function fitCells(){
@@ -137,14 +149,14 @@ function fitCells(){
  });
 }
 
-function renderDay(names,dayIndex){
+function renderDay(names,dayIndex,periodCount){
  const iso=data.days[dayIndex];let hour='<div></div>';
- for(let n=1;n<=8;n++)hour+=`<div class="hour">${n}</div>`;
+ for(let n=1;n<=periodCount;n++)hour+=`<div class="hour">${n}</div>`;
  let columns=names.map(name=>{const lessons=data.classes[name]||[];const byNr={};for(const l of lessons){if(l.day===iso)(byNr[l.nr]??=[]).push(l);}
  let content=`<div class="class-name">${escapeHtml(name)}</div>`;
- for(let n=1;n<=8;n++)content+=cell(byNr[n],dayIndex,n);
+ for(let n=1;n<=periodCount;n++)content+=cell(byNr[n],dayIndex,n);
  return `<div class="class-col">${content}</div>`;}).join('');
- return `<div class="day-panel">${dayIndex===0?`<div class="hour-column">${hour}</div>`:`<div class="hour-column hidden-hours">${hour}</div>`}<div class="class-grid" style="--class-count:${Math.max(1,names.length)}">${columns}</div></div>`;
+ return `<div class="day-panel" data-date="${iso}">${dayIndex===0?`<div class="hour-column">${hour}</div>`:`<div class="hour-column hidden-hours">${hour}</div>`}<div class="class-grid" style="--class-count:${Math.max(1,names.length)}">${columns}</div></div>`;
 }
 function collectInfoNotes(){
  if(!data)return [];
@@ -178,17 +190,39 @@ function notePages(){
 }
 function render(){if(!data)return;
  const rows=Math.max(1,Math.min(3,Number(BOARD_SETTINGS.display_rows)||2));const board=document.getElementById('board');board.style.setProperty('--display-rows',rows);
- document.getElementById('todayTitle').textContent='Heute – '+dateLabel(data.days[0]);
- document.getElementById('tomorrowTitle').textContent='Morgen – '+dateLabel(data.days[1]);
+ const now=new Date();
+ document.getElementById('todayTitle').textContent=dayHeading(data.days[0],now);
+ document.getElementById('tomorrowTitle').textContent=dayHeading(data.days[1],now);
  refreshInfoDisplay();
+ const periodCount=Math.max(8,...Object.keys(BOARD_SETTINGS.lesson_times).map(Number),
+  ...Object.values(data.classes).map(lessons=>lessons.reduce((last,l)=>Math.max(last,l.nr),0)));
+ board.style.setProperty('--period-count',periodCount);
  const selected=Array.from({length:rows},(_,i)=>levels[(index+i)%levels.length]);
  board.innerHTML=selected.map(level=>{const names=Object.keys(data.classes).filter(k=>gradeOf(k)===level).sort((a,b)=>a.localeCompare(b,'de',{numeric:true}));
- return `<section class="level">${renderDay(names,0)}${renderDay(names,1)}</section>`;}).join('');
+ return `<section class="level">${renderDay(names,0,periodCount)}${renderDay(names,1,periodCount)}</section>`;}).join('');
+ markCurrentPeriod(now);
  requestAnimationFrame(fitCells);
 }
 function next(){const rows=Math.max(1,Math.min(3,Number(BOARD_SETTINGS.display_rows)||2));index=(index+rows)%levels.length;lastChange=Date.now();render()}
 async function load(){try{const r=await fetch('/api/week',{cache:'no-store'});const j=await r.json();if(!r.ok)throw Error(j.error||'HTTP '+r.status);data=j;render();}catch(e){document.getElementById('board').innerHTML='<div class="error">'+escapeHtml(e.message)+'</div>';}}
-function updateClock(){const now=new Date();document.getElementById('clock').textContent=new Intl.DateTimeFormat('de-DE',{weekday:'short',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}).format(now);}
+function currentPeriod(times, time){
+ const periods=Object.keys(times);
+ if(!periods.length || time<times[periods[0]].start)return 0;
+ return Number(periods.find(n=>time<times[n].end)||0);
+}
+function markCurrentPeriod(now){
+ const pad=n=>String(n).padStart(2,'0');
+ const today=`${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}`;
+ const period=currentPeriod(BOARD_SETTINGS.lesson_times,`${pad(now.getHours())}:${pad(now.getMinutes())}`);
+ document.querySelectorAll('#board .day-panel').forEach(panel=>{
+  const active=panel.dataset.date===today?period:0;
+  panel.querySelectorAll('.class-col,.hour-column').forEach(column=>{
+   for(let n=1;n<column.children.length;n++)
+    column.children[n].classList.toggle('current-period',n===active);
+  });
+ });
+}
+function updateClock(){const now=new Date();document.getElementById('clock').textContent=new Intl.DateTimeFormat('de-DE',{weekday:'short',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}).format(now);markCurrentPeriod(now);}
 let infoSlides=[],infoIndex=0,infoSignature='',currentInfoKey='';
 function allInfoSlides(){return [...notePages(),...infoSlides.map(slide=>({kind:'pdf',...slide}))];}
 function refreshInfoDisplay(){
@@ -213,7 +247,7 @@ setInterval(refreshInfo,5000);refreshInfo();
 setInterval(()=>{const sec=BOARD_SETTINGS.switch_seconds;if(sec&&Date.now()-lastChange>=sec*1000)next()},1000);
 setInterval(()=>{coursePhase++;if(data)render()},Math.max(1,BOARD_SETTINGS.course_seconds)*1000);
 
-setInterval(load,Math.max(30,BOARD_SETTINGS.refresh_seconds)*1000);setInterval(updateClock,15000);updateClock();load();
+setInterval(load,Math.max(30,BOARD_SETTINGS.refresh_seconds)*1000);setInterval(updateClock,1000);updateClock();load();
 </script></body></html>'''
 
 def api_get(session, path, params=None):
@@ -229,6 +263,10 @@ def ident(obj):
 
 def details(item):
     return {'weekday': int(item.get('weekday') or 0), 'nr': int(item.get('nr') or 0), 'subject': ident(item.get('subject')), 'teacher': ', '.join(filter(None, [ident(x) for x in (item.get('teachers') or [])])), 'room': ', '.join(filter(None, [ident(x) for x in (item.get('rooms') or [])])), 'status': item.get('status', 'initial'), 'changed': False, 'note': ''}
+
+def default_group_name_display(group):
+    return group.upper().startswith('NGS')
+
 
 def display_names(lesson):
     """Translate only visible teacher/room labels, after original/replacement resolution."""
@@ -348,7 +386,11 @@ def visible_days(now=None):
     """Two school days, advancing at configured cutoff."""
     now = now or datetime.now()  # local clock of the school computer
     cursor = now.date()
-    if now.time() >= time(int(SETTINGS['cutoff_hour']), 0) and cursor.weekday() < 5:
+    # Keep today's plan visible through the last configured lesson.
+    cutoff = max([time(int(SETTINGS['cutoff_hour']), 0)] + [
+        time.fromisoformat(period['end']) for period in SETTINGS['lesson_times'].values()
+    ])
+    if now.time() >= cutoff and cursor.weekday() < 5:
         cursor += timedelta(days=1)
     result = []
     while len(result) < 2:
@@ -458,7 +500,7 @@ def build_week(days):
         if not target_classes(group, classes):
             continue
         lesson = details(item)
-        if 1 <= lesson['weekday'] <= 5 and 1 <= lesson['nr'] <= 8:
+        if 1 <= lesson['weekday'] <= 5 and 1 <= lesson['nr'] <= 10:
             regular.setdefault((group, lesson['weekday'], lesson['nr']), []).append(lesson)
             for d in reference_days:
                 if d.isoweekday() == lesson['weekday'] and applicable(item, d):
@@ -504,7 +546,7 @@ def build_week(days):
                     raw_nr = int(raw.get('nr') or 0)
                 except (ValueError, TypeError):
                     continue
-                if raw_group and 1 <= raw_nr <= 8:
+                if raw_group and 1 <= raw_nr <= 10:
                     mentioned.add((raw_group, weekday, raw_nr))
             moved_from = set()
             planned_by_course = {}
@@ -531,7 +573,7 @@ def build_week(days):
                     continue
                 lesson = details(item)
                 lesson['weekday'] = weekday
-                if not 1 <= lesson['nr'] <= 8:
+                if not 1 <= lesson['nr'] <= 10:
                     continue
                 originals = regular_by_date[day_iso].get((group, weekday, lesson['nr']), [])
                 if lesson['status'] == 'canceled' and originals:
@@ -561,6 +603,7 @@ def build_week(days):
                     lesson['note'] = ''  # Keine ehemalige Lehrkraft im Schüler-Board
                 entries.append((group, lesson))
 
+    group_name_display = SETTINGS.get('group_name_display') or {}
     for ddate in days:
         day_iso = ddate.isoformat()
         if day_iso in published:
@@ -579,6 +622,8 @@ def build_week(days):
         for group, lesson in source:
             for name in target_classes(group, classes):
                 entry = display_names(dict(lesson, day=day_iso))
+                if group_name_display.get(group, default_group_name_display(group)):
+                    entry['display_label'] = group
                 classes[name].setdefault((day_iso, entry['nr']), []).append(entry)
 
     return {'days': [d.isoformat() for d in days], 'day_notes': day_notes, 'classes': {
@@ -589,6 +634,7 @@ def build_week(days):
 def home():
     import json
     client_settings = {
+        'lesson_times': SETTINGS['lesson_times'],
         'switch_seconds': int(SETTINGS['switch_seconds']),
         'course_seconds': int(SETTINGS['course_seconds']),
         'refresh_seconds': int(SETTINGS['refresh_seconds']),
@@ -597,7 +643,7 @@ def home():
     }
     from markupsafe import escape
     html = HTML.replace('__BOARD_SETTINGS_JSON__', json.dumps(client_settings))
-    html = html.replace('__SCHOOL_NAME__', str(escape(SETTINGS.get('school_name') or 'StundenplanBoard')))
+    html = html.replace('__SCHOOL_NAME__', str(escape(SETTINGS.get('school_name') or 'Musterschule')))
     rows = max(1, min(3, int(SETTINGS['display_rows'])))
     start_grade = max(5, min(10, int(SETTINGS['start_grade'])))
     start_index = ((start_grade - 5) // rows) * rows
@@ -628,6 +674,8 @@ def week():
 
 
 def info_directory():
+    if not SETTINGS['pdf_folder']:
+        return None
     folder = Path(SETTINGS['pdf_folder']).expanduser().resolve()
     folder.mkdir(parents=True, exist_ok=True)
     return folder
@@ -638,7 +686,10 @@ def info_files():
     # Other filenames have no expiry and remain until removed.
     today = date.today()
     files = []
-    for p in info_directory().iterdir():
+    directory = info_directory()
+    if directory is None:
+        return []
+    for p in directory.iterdir():
         if not p.is_file() or p.suffix.lower() != '.pdf':
             continue
         match = re.fullmatch(r'(\d{8})-(\d{8})', p.stem)

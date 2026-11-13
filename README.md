@@ -1,26 +1,29 @@
 # Schul-Board
 
-Schul-Board ist ein browserbasiertes Informationsboard für Stunden- und Vertretungspläne mit Anbindung an **beste.schule**.
+Schul-Board zeigt Stunden- und Vertretungspläne aus **beste.schule** sowie Hinweise und PDF-Aushänge auf einem Bildschirm an. Die Verwaltung läuft unter Windows, die Anzeige im Browser.
 
-© 2026 Robert Kettmann
+## Installation und Einrichtung
 
-## Installation unter Windows
+1. Dieses Repository über **Code → Download ZIP** herunterladen und entpacken.
+2. `Einmalig_installieren.bat` ausführen. Das Skript richtet die Python-Umgebung für Schul-Board ein und bietet bei Bedarf an, Python zu installieren.
+3. `Starten.bat` öffnen. Unter **Allgemein → Schule** den Schulnamen eintragen und optional ein eigenes PNG-Logo auswählen. Für die fiktive Musterschule ist ein [Beispiel-Logo](schullogo.png) enthalten.
+4. Unter **API & Server** einen berechtigten API-Token für die eigene Schule eintragen und die Verbindung testen. Beim Speichern wird der Token im Windows-Anmeldespeicher abgelegt.
+5. Unter **Klassen & Gruppen** die Hauptklassen übernehmen oder eintragen und bei Bedarf ihre Unterrichtsgruppen zuordnen. Für jede zugeordnete Gruppe lässt sich wählen, ob der Gruppenname oder das Fachkürzel angezeigt wird.
+6. **Board starten** wählen und anschließend **Im Browser öffnen**. Mit **F11** lässt sich der Browser in den Vollbildmodus schalten.
 
-1. Repository als ZIP herunterladen und entpacken.
-2. `Einmalig_installieren.bat` ausführen.
-3. `Starten.bat` ausführen.
-4. In der Verwaltung den persönlichen beste.schule-API-Token lokal eintragen.
+## Anzeige anpassen
 
-Weitere Hinweise stehen in [README.txt](README.txt).
+- Unter **Allgemein → Unterrichtszeiten** die Stundenlänge eingeben und die Startzeiten der Stunden auswählen. Das Ende berechnet Schul-Board automatisch. Die Markierung springt beim Stundenende zur nächsten eingetragenen Stunde.
+- Unter **Anzeige & PDFs** lassen sich der Wechsel zwischen Jahrgängen, der Aktualisierungsabstand und die Anzeigedauer der PDFs einstellen.
+- Unter **Lehrer** und **Räume** können die Kürzel aus der API durch eigene Anzeigebezeichnungen ersetzt werden.
+- Für PDF-Aushänge unter **Anzeige & PDFs** einen Ordner auswählen und die gewünschten PDFs dort ablegen. Ein Dateiname wie `01122026-18122026.pdf` begrenzt die Anzeige auf diesen Zeitraum einschließlich beider Tage.
 
-## Updates
+## Betrieb und Updates
 
-Über **Auf Updates prüfen** kann die Verwaltung nach neueren Versionen in den [öffentlichen Releases](https://github.com/BigK0815/Schul-Board-Public/releases) suchen. Der Button installiert keine Updates automatisch. Solange noch kein Release veröffentlicht ist, wird kein Versionsstand gefunden.
+Standardmäßig ist die Anzeige nur auf dem Rechner erreichbar, auf dem Schul-Board läuft. Für einen separaten Anzeigerechner kann der Zugriff unter **API & Server** für das Schulnetz aktiviert werden. In diesem Modus können Geräte, die den Server erreichen, die angezeigten Pläne und Aushänge abrufen.
 
-## Datenschutz und Konfiguration
-
-Keine echten API-Tokens, Zugangsdaten, Schülerdaten, Stundenplandaten oder lokale Konfiguration in GitHub hochladen. Schulname und Logo lassen sich in der Anwendung konfigurieren.
+Schuleinstellungen und Zugangsdaten werden lokal gespeichert. Beim Aktualisieren können die vorhandenen Einstellungen weiterverwendet werden. **Auf Updates prüfen** sucht nach neueren [GitHub-Releases](https://github.com/BigK0815/Schul-Board-Public/releases). Die Installation erfolgt manuell.
 
 ## Lizenz
 
-**© 2026 Robert Kettmann.** Kostenlose **nichtkommerzielle** Nutzung, Bearbeitung und Weitergabe sind gemäß der [Lizenz](LICENSE) erlaubt. Kommerzielle Nutzung bedarf einer vorherigen schriftlichen Genehmigung. Diese Lizenz ist keine OSI-anerkannte Open-Source-Lizenz.
+Copyright (c) 2026 Robert Kettmann. Nichtkommerzielle Nutzung, Bearbeitung und Weitergabe sind gemäß der [Lizenz](LICENSE) möglich.

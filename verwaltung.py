@@ -1,32 +1,58 @@
 """Lokale Windows-Verwaltung des Stundenplan-Boards."""
 import json
 import os
+import re
 import socket
 import threading
 import tkinter as tk
 import webbrowser
+from datetime import time
 from pathlib import Path
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, messagebox, filedialog, font
 
 import keyring
 import requests
 from waitress import create_server
 import board_engine
 import updater
+from zeitauswahl import choose_time
+from verwaltungsstil import SettingsViewport, apply_style, card, toggle, flow_buttons, wrapping_label
 
 ROOT = Path(os.environ.get('APPDATA', str(Path.home()))) / 'StundenplanBoard'
 CONFIG = ROOT / 'einstellungen.json'
 SERVICE = 'StundenplanBoard-beste.schule'
 ACCOUNT = 'api-token'
 DEFAULT = {'port':5000,'lan':False,'refresh_seconds':300,'switch_seconds':15,
-           'course_seconds':4,'cutoff_hour':15,'start_grade':5,'display_rows':2,'pdf_folder':str(Path.home() / 'StundenplanBoard_Infoboard'),'pdf_seconds':12,'group_mappings':{},'teacher_mappings':{},'room_mappings':{},'school_name':'Meine Schule','school_logo':'','automatic_group_mapping':True}
+           'course_seconds':4,'cutoff_hour':15,'start_grade':5,'display_rows':2,'pdf_folder':'','pdf_seconds':12,'group_mappings':{},'group_name_display':{},'lesson_times':{},'teacher_mappings':{},'room_mappings':{},'school_name':'Musterschule','school_logo':'','automatic_group_mapping':False}
+
+def lesson_end(start, duration):
+    if not 1 <= duration < 1440:
+        raise ValueError('Bitte eine gültige Stundenlänge in ganzen Minuten eingeben.')
+    start_time = time.fromisoformat(start)
+    minutes = start_time.hour * 60 + start_time.minute + duration
+    if minutes >= 1440:
+        raise ValueError('Das Stundenende muss vor Mitternacht liegen.')
+    return f'{minutes // 60:02d}:{minutes % 60:02d}'
+
+
+def saved_duration(config):
+    if 'lesson_duration' in config:
+        return config['lesson_duration']
+    for period in config['lesson_times'].values():
+        start, end = (time.fromisoformat(period[key]) for key in ('start', 'end'))
+        return (end.hour - start.hour) * 60 + end.minute - start.minute
+    return 45
+
 
 class Window:
     def __init__(self, root):
         self.root = root
         self.root.title('Schul-Board – Verwaltung')
-        self.root.geometry('940x610')
-        self.root.minsize(780,510)
+        width = min(1200, max(1, root.winfo_screenwidth() - 64))
+        height = min(920, max(1, root.winfo_screenheight() - 120))
+        self.root.minsize(min(880, width), min(420, height))
+        self.root.geometry(f'{width}x{height}')
+        apply_style(root)
         ROOT.mkdir(parents=True, exist_ok=True)
         try: self.config = {**DEFAULT, **json.loads(CONFIG.read_text(encoding='utf-8'))}
         except (FileNotFoundError, ValueError): self.config = dict(DEFAULT)
@@ -36,57 +62,131 @@ class Window:
 
         shell = ttk.Frame(root, padding=12)
         shell.pack(fill='both', expand=True)
-        ttk.Label(shell, text='StundenplanBoard – Verwaltung',
+        ttk.Label(shell, text='Schul-Board – Verwaltung',
                   font=('Segoe UI', 17, 'bold')).pack(anchor='w', pady=(0,10))
         body = ttk.Frame(shell)
-        body.pack(fill='both', expand=True)
-        navigation = ttk.LabelFrame(body, text='Bereiche', padding=8)
+        body.pack(fill='both', expand=True, side='top')
+        navigation = ttk.Frame(body, style='Navigation.TFrame', padding=(8, 12))
         navigation.pack(side='left', fill='y', padx=(0,10))
-        content = ttk.Frame(body)
-        content.pack(side='left', fill='both', expand=True)
+        self.viewport = SettingsViewport(body)
+        self.viewport.pack(side='left', fill='both', expand=True)
         self.pages = {}
         self.nav_buttons = {}
+        self.nav_markers = {}
         for name in ('Allgemein', 'API & Server', 'Anzeige & PDFs',
                      'Lehrer', 'Räume', 'Klassen & Gruppen'):
-            page = ttk.Frame(content, padding=12)
+            page = ttk.Frame(self.viewport.content, padding=12)
             self.pages[name] = page
-            btn = ttk.Button(navigation, text=name, width=23,
+            ttk.Label(page, text=name, style='Page.TLabel').pack(anchor='w', pady=(0, 16))
+            nav_row = ttk.Frame(navigation, style='Navigation.TFrame')
+            nav_row.pack(fill='x', pady=2)
+            marker = ttk.Frame(nav_row, width=3, style='Navigation.TFrame')
+            marker.pack(side='left', fill='y', pady=6)
+            btn = ttk.Button(nav_row, text=name, width=19, style='Nav.TButton',
                              command=lambda n=name: self.show_page(n))
-            btn.pack(fill='x', pady=3)
+            btn.pack(side='left', fill='x', expand=True)
             self.nav_buttons[name] = btn
+            self.nav_markers[name] = marker
 
         general = self.pages['Allgemein']
-        school = ttk.LabelFrame(general, text='Schule', padding=12)
-        school.pack(fill='x', pady=5)
-        ttk.Label(school, text='Schulname im Kopfbereich').pack(anchor='w')
+        tabs = ttk.Frame(general)
+        tabs.pack(fill='x', pady=(0, 10))
+        school_tab = ttk.Frame(general)
+        times_tab = ttk.Frame(general)
+
+        def select_tab(selected):
+            for panel, button in tab_buttons.items():
+                panel.pack_forget()
+                button.configure(style='SelectedNav.TButton' if panel is selected else 'Nav.TButton')
+            selected.pack(fill='x')
+            self.viewport.canvas.yview_moveto(0)
+            self.viewport.after_idle(self.viewport.refresh)
+
+        tab_buttons = {}
+        for panel, label in ((school_tab, 'Schule'), (times_tab, 'Unterrichtszeiten')):
+            button = ttk.Button(tabs, text=label, command=lambda p=panel: select_tab(p))
+            button.pack(side='left', padx=(0, 6))
+            tab_buttons[panel] = button
+        select_tab(school_tab)
+        school = card(school_tab, 'Schule')
+        fields = ttk.Frame(school, style='Card.TFrame')
+        fields.pack(fill='x')
+        fields.columnconfigure(1, weight=1)
+        ttk.Label(fields, text='Schulname im Kopfbereich', style='Card.TLabel').grid(
+            row=0, column=0, sticky='w', padx=(0, 16))
         self.school_name = tk.StringVar(value=self.config.get('school_name', ''))
-        ttk.Entry(school, textvariable=self.school_name).pack(fill='x', pady=5)
-        ttk.Label(school, text='Schullogo (PNG, leer = mitgeliefertes Logo)').pack(anchor='w')
-        logo_row = ttk.Frame(school)
-        logo_row.pack(fill='x', pady=5)
+        ttk.Entry(fields, textvariable=self.school_name).grid(row=0, column=1, sticky='ew')
+        ttk.Separator(fields).grid(row=1, column=0, columnspan=2, sticky='ew', pady=12)
+        logo_label = ttk.Frame(fields, style='Card.TFrame')
+        logo_label.grid(row=2, column=0, sticky='w', padx=(0, 16))
+        ttk.Label(logo_label, text='Schullogo (PNG)', style='Card.TLabel').pack(anchor='w')
+        ttk.Label(logo_label, text='Leer = mitgeliefertes Logo',
+                  style='CardMuted.TLabel').pack(anchor='w')
+        logo_row = ttk.Frame(fields, style='Card.TFrame')
+        logo_row.grid(row=2, column=1, sticky='ew')
         self.school_logo = tk.StringVar(value=self.config.get('school_logo', ''))
-        ttk.Entry(logo_row, textvariable=self.school_logo).pack(side='left', fill='x', expand=True)
-        ttk.Button(logo_row, text='Auswählen …', command=self.choose_school_logo).pack(side='left', padx=(5,0))
+        ttk.Entry(logo_row, textvariable=self.school_logo, width=12).pack(
+            side='left', fill='x', expand=True)
+        ttk.Button(logo_row, text='Auswählen …', command=self.choose_school_logo).pack(
+            side='left', padx=(8, 0))
         self.automatic_group_mapping = tk.BooleanVar(value=self.config.get('automatic_group_mapping', True))
-        ttk.Checkbutton(general,
-                        text='Automatische Gruppenzuordnung (Gruppenregeln)',
-                        variable=self.automatic_group_mapping).pack(anchor='w', pady=12)
-        ttk.Label(general, text='Für andere Schulen die Gruppenautomatik ausschalten.',
-                  foreground='#666').pack(anchor='w')
+        grouping = card(school_tab, 'Automatische Gruppenzuordnung')
+        toggle(grouping, 'Gruppenregeln anwenden', self.automatic_group_mapping).pack(side='right')
+        ttk.Label(grouping, text='Nur aktivieren, wenn die Gruppenkennungen zu den eingebauten Regeln passen.',
+                  style='CardMuted.TLabel', wraplength=310).pack(side='left', fill='x', expand=True)
+
+        times_card = card(times_tab, 'Unterrichtszeiten')
+        duration_row = ttk.Frame(times_card, style='Card.TFrame')
+        duration_row.pack(fill='x', pady=(0, 12))
+        ttk.Label(duration_row, text='Stundenlänge (Minuten)', style='CardTitle.TLabel').pack(side='left')
+        self.lesson_duration = tk.StringVar(value=str(saved_duration(self.config)))
+        ttk.Entry(duration_row, textvariable=self.lesson_duration, width=6).pack(side='left', padx=12)
+        times_table = ttk.Frame(times_card, style='Card.TFrame')
+        times_table.pack(fill='x')
+        for column, heading in enumerate(('Stunde', 'Beginn', 'Ende (automatisch)')):
+            ttk.Label(times_table, text=heading, style='CardTitle.TLabel').grid(
+                row=0, column=column, sticky='w', padx=6)
+        self.lesson_times = {}
+        for period in range(1, 11):
+            ttk.Label(times_table, text=str(period), style='Card.TLabel').grid(
+                row=period, column=0, padx=6)
+            saved = self.config['lesson_times'].get(str(period), {})
+            value = tk.StringVar(value=saved.get('start', ''))
+            self.lesson_times[period] = value
+            button_text = tk.StringVar()
+            end_text = tk.StringVar()
+
+            def refresh_time(*args, start=value, button=button_text, end=end_text):
+                beginning = start.get()
+                button.set(beginning or '—')
+                try:
+                    end.set(lesson_end(beginning, int(self.lesson_duration.get())) if beginning else '—')
+                except ValueError:
+                    end.set('—')
+
+            value.trace_add('write', refresh_time)
+            self.lesson_duration.trace_add('write', refresh_time)
+            refresh_time()
+            ttk.Button(times_table, textvariable=button_text, width=9,
+                       command=lambda v=value, title=f'Beginn der {period}. Stunde':
+                           choose_time(self.root, title, v)).grid(
+                               row=period, column=1, padx=6, pady=2, sticky='ew')
+            ttk.Label(times_table, textvariable=end_text, style='Card.TLabel').grid(
+                row=period, column=2, padx=6, sticky='w')
 
         api = self.pages['API & Server']
-        access = ttk.LabelFrame(api, text='beste.schule API', padding=12)
-        access.pack(fill='x', pady=5)
-        ttk.Label(access, text='Token (sicher im Windows-Anmeldespeicher)').pack(anchor='w')
+        access = card(api, 'beste.schule API')
+        ttk.Label(access, text='Token (sicher im Windows-Anmeldespeicher)',
+                  style='Card.TLabel').pack(anchor='w')
         self.token = ttk.Entry(access, show='•')
         self.token.pack(fill='x', pady=7)
         ttk.Button(access, text='Token-Verbindung testen', command=self.test).pack(anchor='w')
         self.lan = tk.BooleanVar(value=self.config['lan'])
-        ttk.Checkbutton(api, text='Im Schulnetz erreichbar (nicht nur dieser PC)',
-                        variable=self.lan).pack(anchor='w', pady=12)
+        server = card(api, 'Server')
+        toggle(server, 'Im Schulnetz erreichbar', self.lan).pack(anchor='w')
 
         settings = self.pages['Anzeige & PDFs']
-        options = ttk.LabelFrame(settings, text='Anzeigeeinstellungen', padding=10)
+        options = ttk.Frame(card(settings, 'Anzeigeeinstellungen'), style='Card.TFrame')
         options.pack(fill='x')
         entries = [
             ('port','Server-Port',[5000,5050,8080]),
@@ -98,20 +198,19 @@ class Window:
             ('display_rows','Klassenstufen übereinander (Zeilen)',[1,2,3]),
             ('pdf_seconds','PDF-Seite anzeigen (Sekunden)',[5,8,10,12,15,20,30,45,60])]
         for i, (key, label, choices) in enumerate(entries):
-            row = ttk.Frame(options)
-            row.grid(row=i//2, column=i%2, sticky='ew', padx=7, pady=5)
-            ttk.Label(row, text=label).pack(anchor='w')
+            row = ttk.Frame(options, style='Card.TFrame')
+            row.grid(row=i//2, column=i%2, sticky='ew', padx=(0, 8), pady=2)
+            ttk.Label(row, text=label, style='Card.TLabel').pack(anchor='w')
             v = tk.StringVar(value=str(self.config[key]))
             self.values[key] = v
             ttk.Combobox(row, textvariable=v, values=choices,
-                         state='readonly', width=12).pack(anchor='w', pady=(2,0))
+                         state='readonly', width=12, style='Compact.TCombobox').pack(anchor='w')
         options.columnconfigure(0, weight=1)
         options.columnconfigure(1, weight=1)
-        pdf = ttk.LabelFrame(settings, text='Infoboard-PDFs', padding=10)
-        pdf.pack(fill='x', pady=9)
-        ttk.Label(pdf, text='Ordner für Info-PDFs').pack(anchor='w')
+        pdf = card(settings, 'Infoboard-PDFs')
+        ttk.Label(pdf, text='Ordner für Info-PDFs', style='Card.TLabel').pack(anchor='w')
         self.pdf_folder = tk.StringVar(value=str(self.config['pdf_folder']))
-        pdfrow = ttk.Frame(pdf)
+        pdfrow = ttk.Frame(pdf, style='Card.TFrame')
         pdfrow.pack(fill='x', pady=5)
         ttk.Entry(pdfrow, textvariable=self.pdf_folder).pack(side='left', fill='x', expand=True)
         ttk.Button(pdfrow, text='Auswählen …', command=self.choose_pdf_folder).pack(side='left', padx=5)
@@ -120,39 +219,94 @@ class Window:
             ('Lehrer','teachers','Lehrerbezeichnungen und Anzeigenamen verwalten'),
             ('Räume','rooms','Raumbezeichnungen und Anzeigenamen verwalten'),
             ('Klassen & Gruppen','groups','Hauptklassen und bis zu 16 Gruppen zuordnen')]:
-            page = self.pages[name]
-            ttk.Label(page, text=name, font=('Segoe UI', 14, 'bold')).pack(anchor='w', pady=(0,8))
-            ttk.Label(page, text=desc).pack(anchor='w', pady=(0,15))
+            page = card(self.pages[name], 'Zuordnungen')
+            ttk.Label(page, text=desc, style='Card.TLabel').pack(anchor='w', pady=(0, 12))
             ttk.Button(page, text='Tabelle bearbeiten / Excel einfügen …',
                        command=lambda k=kind: self.open_mapping_editor(k)).pack(anchor='w')
             ttk.Label(page, text='Der Tabelleneditor öffnet sich in einem eigenen Fenster.',
-                      foreground='#666').pack(anchor='w', pady=12)
+                      style='CardMuted.TLabel').pack(anchor='w', pady=(8, 0))
 
-        footer = ttk.Frame(shell)
-        footer.pack(side='bottom', fill='x', pady=(10,0))
-        ttk.Separator(shell, orient='horizontal').pack(side='bottom', fill='x')
-        ttk.Button(footer, text='Speichern', command=self.save).pack(side='left', padx=(0,7))
-        ttk.Button(footer, text='Im Browser öffnen', command=self.open).pack(side='left', padx=(0,7))
+        group_display = card(self.pages['Klassen & Gruppen'], 'Anzeige im Plan')
+        ttk.Label(group_display, text='Mit Häkchen erscheint der Gruppenname, ohne Häkchen das Fachkürzel.',
+                  style='CardMuted.TLabel', wraplength=420).pack(anchor='w', pady=(0, 10))
+        self.group_name_options = {}
+        self.group_name_list = ttk.Frame(group_display, style='Card.TFrame')
+        self.group_name_list.pack(fill='x')
+        self.group_name_list.bind('<Configure>', self.layout_group_name_options)
+        self.group_name_columns = 0
+        self.refresh_group_name_options()
+
+        bottom = ttk.Frame(shell)
+        bottom.pack(side='bottom', fill='x', before=body)
+        ttk.Separator(bottom).pack(fill='x', pady=(8, 6))
+        footer = ttk.Frame(bottom)
+        footer.pack(side='bottom', fill='x', pady=(6, 0))
+        ttk.Button(footer, text='Speichern', command=self.save, style='Accent.TButton')
+        ttk.Button(footer, text='Im Browser öffnen', command=self.open)
         self.start_btn = ttk.Button(footer, text='Board starten', command=self.start)
-        self.start_btn.pack(side='left', padx=(0,7))
         self.stop_btn = ttk.Button(footer, text='Server stoppen', command=self.stop, state='disabled')
-        self.stop_btn.pack(side='left', padx=(0,7))
-        ttk.Button(footer, text='Beenden', command=self.close).pack(side='right')
-        ttk.Button(footer, text='Auf Updates prüfen', command=self.check_updates).pack(side='right', padx=(0,7))
-        statusbar = ttk.Frame(shell)
+        ttk.Button(footer, text='Beenden', command=self.close)
+        ttk.Button(footer, text='Auf Updates prüfen', command=self.check_updates)
+        flow_buttons(footer)
+        statusbar = ttk.Frame(bottom)
         statusbar.pack(side='bottom', fill='x', pady=(7,0))
         self.status = tk.StringVar(value='Server ist gestoppt')
         ttk.Label(statusbar, textvariable=self.status, font=('Segoe UI', 9, 'bold')).pack(anchor='w')
         self.address = tk.StringVar(value='')
-        ttk.Label(statusbar, textvariable=self.address).pack(anchor='w')
+        ttk.Label(statusbar, textvariable=self.address, style='Muted.TLabel').pack(anchor='w')
+        self.viewport.bind_controls(self.viewport.content)
         self.show_page('Allgemein')
         self.root.protocol('WM_DELETE_WINDOW', self.close)
 
     def show_page(self, name):
-        for page in self.pages.values():
-            page.pack_forget()
-        self.pages[name].pack(fill='both', expand=True)
+        self.viewport.show(self.pages[name])
+        for label, button in self.nav_buttons.items():
+            button.configure(style='SelectedNav.TButton' if label == name else 'Nav.TButton')
+            self.nav_markers[label].configure(
+                style='Selection.TFrame' if label == name else 'Navigation.TFrame')
 
+
+    def refresh_group_name_options(self):
+        mapping = self.config.get('group_mappings') or {}
+        groups = {group for group, targets in mapping.items()
+                  if any(target.strip() != group for target in
+                         (re.split('[,;]', targets) if isinstance(targets, str) else targets or [])
+                         if target.strip())}
+        for child in self.group_name_list.winfo_children():
+            child.destroy()
+        self.group_name_options = {
+            group: self.group_name_options.get(group) or tk.BooleanVar(
+                value=self.config['group_name_display'].get(
+                    group, board_engine.default_group_name_display(group)))
+            for group in sorted(groups, key=lambda name: [
+                int(part) if part.isascii() and part.isdigit() else part
+                for part in re.split(r'([0-9]+)', name.casefold().translate(str.maketrans('äöü', 'aou')))
+            ])
+        }
+        for group, checked in self.group_name_options.items():
+            option = ttk.Checkbutton(self.group_name_list, text=group, variable=checked,
+                                     style='GroupName.TCheckbutton')
+            self.viewport.bind_controls(option)
+        if not self.group_name_options:
+            ttk.Label(self.group_name_list, text='Noch keine Gruppen in der Zuordnungstabelle.',
+                      style='CardMuted.TLabel').pack(anchor='w')
+        self.group_name_columns = 0
+        self.layout_group_name_options()
+
+    def layout_group_name_options(self, _event=None):
+        if not self.group_name_options:
+            return
+        options = self.group_name_list.winfo_children()
+        column_width = max(option.winfo_reqwidth() for option in options) + 16
+        columns = min(4, max(1, self.group_name_list.winfo_width() // column_width))
+        if columns == self.group_name_columns:
+            return
+        for column in range(4):
+            self.group_name_list.columnconfigure(column, weight=int(column < columns))
+        for index, option in enumerate(options):
+            row, column = divmod(index, columns)
+            option.grid(row=row, column=column, sticky='w', pady=3, padx=(0, 8))
+        self.group_name_columns = columns
 
     def open_mapping_editor(self, kind):
         """Editable mapping table with tab-separated Excel clipboard import/export."""
@@ -165,28 +319,33 @@ class Window:
         }
         title, key, left_label, right_label = specs[kind]
         dialog = tk.Toplevel(self.root)
-        dialog.title('StundenplanBoard – ' + title)
-        dialog.geometry('900x710')
+        dialog.title('Schul-Board – ' + title)
+        dialog.geometry(f'{min(900, dialog.winfo_screenwidth() - 32)}x{min(710, dialog.winfo_screenheight() - 90)}')
         dialog.transient(self.root)
         outer = ttk.Frame(dialog, padding=12)
         outer.pack(fill='both', expand=True)
         ttk.Label(outer, text=title, font=('Segoe UI', 13, 'bold')).pack(anchor='w')
-        ttk.Label(outer, text='Excel: zwei Spalten markieren, Strg+C und hier Strg+V. Mehrere Zeilen werden gemeinsam eingefügt. '
-                  'Bei Gruppen: eine Zeile je Zuordnung oder mehrere Klassen durch Komma trennen.',
-                  wraplength=850).pack(anchor='w', pady=(5, 9))
+        wrapping_label(outer, text='Excel: zwei Spalten markieren, Strg+C und hier Strg+V. Mehrere Zeilen werden gemeinsam eingefügt. '
+                  'Bei Gruppen: eine Zeile je Zuordnung oder mehrere Klassen durch Komma trennen.').pack(anchor='w', pady=(5, 9))
         data = dict(self.config.get(key) or {})
         if kind == 'groups':
             data = {k: (v if isinstance(v, list) else [v]) for k,v in data.items()}
         columns = ('source', 'target')
-        tree = ttk.Treeview(outer, columns=columns, show='headings', selectmode='extended')
+        table_area = ttk.Frame(outer)
+        tree = ttk.Treeview(table_area, columns=columns, show='headings', selectmode='extended')
         tree.heading('source', text=left_label)
         tree.heading('target', text=right_label)
         tree.column('source', width=350)
         tree.column('target', width=440)
-        sb = ttk.Scrollbar(outer, command=tree.yview)
+        sb = ttk.Scrollbar(table_area, command=tree.yview)
         tree.configure(yscrollcommand=sb.set)
-        sb.pack(side='right', fill='y')
-        tree.pack(fill='both', expand=True)
+        xscroll = ttk.Scrollbar(table_area, orient='horizontal', command=tree.xview)
+        tree.configure(xscrollcommand=xscroll.set)
+        table_area.columnconfigure(0, weight=1)
+        table_area.rowconfigure(0, weight=1)
+        tree.grid(row=0, column=0, sticky='nsew')
+        sb.grid(row=0, column=1, sticky='ns')
+        xscroll.grid(row=1, column=0, sticky='ew')
         def as_text(value):
             return ', '.join(value) if isinstance(value,list) else str(value)
         def redraw():
@@ -195,13 +354,14 @@ class Window:
                 tree.insert('', 'end', iid=name, values=(name, as_text(data[name])))
         redraw()
         row = ttk.Frame(outer)
-        row.pack(fill='x', pady=7)
+
+        row.columnconfigure(1, weight=1)
         source = tk.StringVar()
         target = tk.StringVar()
-        ttk.Label(row,text=left_label+':').pack(side='left')
-        ttk.Entry(row,textvariable=source,width=23).pack(side='left',padx=4)
-        ttk.Label(row,text=right_label+':').pack(side='left')
-        ttk.Entry(row,textvariable=target,width=28).pack(side='left',padx=4,fill='x',expand=True)
+        ttk.Label(row,text=left_label+':').grid(row=0, column=0, sticky='w')
+        ttk.Entry(row,textvariable=source,width=12).grid(row=0, column=1, sticky='ew', padx=5)
+        ttk.Label(row,text=right_label+':').grid(row=1, column=0, sticky='w')
+        ttk.Entry(row,textvariable=target,width=12).grid(row=1, column=1, sticky='ew', padx=5)
         def selected(_=None):
             ids=tree.selection()
             if len(ids)==1:
@@ -227,18 +387,18 @@ class Window:
         def apply():
             try:put(source.get(),target.get());redraw()
             except ValueError as exc:messagebox.showerror('Eingabe prüfen',str(exc),parent=dialog)
-        ttk.Button(row,text='Übernehmen',command=apply).pack(side='left')
-        tools=ttk.Frame(outer);tools.pack(fill='x',pady=3)
+        ttk.Button(row,text='Übernehmen',command=apply).grid(row=1, column=2)
+        tools=ttk.Frame(outer)
         def delete():
             for name in tree.selection():data.pop(name,None)
             redraw()
-        ttk.Button(tools,text='Ausgewählte entfernen',command=delete).pack(side='left',padx=(0,8))
+        ttk.Button(tools,text='Ausgewählte entfernen',command=delete)
         def copy_rows(_=None):
             ids=tree.selection() or tree.get_children()
             content='\n'.join(name+'\t'+as_text(data[name]) for name in ids)
             dialog.clipboard_clear();dialog.clipboard_append(content)
             return 'break'
-        ttk.Button(tools,text='Auswahl nach Excel kopieren',command=copy_rows).pack(side='left',padx=(0,8))
+        ttk.Button(tools,text='Auswahl nach Excel kopieren',command=copy_rows)
         def paste_rows(_=None):
             try:raw=dialog.clipboard_get()
             except tk.TclError:return 'break'
@@ -256,12 +416,12 @@ class Window:
             redraw()
             status.set(f'{count} Zeilen übernommen.' + (' Fehler: '+'; '.join(errors[:4]) if errors else ''))
             return 'break'
-        ttk.Button(tools,text='Aus Excel einfügen (Strg+V)',command=paste_rows).pack(side='left')
+        ttk.Button(tools,text='Aus Excel einfügen (Strg+V)',command=paste_rows)
         tree.bind('<Control-v>',paste_rows)
         tree.bind('<Control-V>',paste_rows)
         tree.bind('<Control-c>',copy_rows)
         status=tk.StringVar(value='Noch nicht gespeicherte Änderungen werden erst durch „Speichern“ übernommen.')
-        ttk.Label(outer,textvariable=status,wraplength=850).pack(anchor='w',pady=6)
+        status_label = wrapping_label(outer,textvariable=status)
         def fetch():
             token=self.get_token()
             if not token:
@@ -293,7 +453,8 @@ class Window:
                     msg=str(exc)
                     dialog.after(0,lambda:status.set('API-Abruf fehlgeschlagen: '+msg))
             threading.Thread(target=work,daemon=True).start()
-        ttk.Button(tools,text='Bezeichnungen aus API übernehmen',command=fetch).pack(side='right')
+        ttk.Button(tools,text='Bezeichnungen aus API übernehmen',command=fetch)
+        flow_buttons(tools)
         def save_mapping():
             try:
                 self.config[key]=data
@@ -304,21 +465,25 @@ class Window:
                 dialog.destroy()
                 self.status.set(title+' gespeichert – Änderungen beim nächsten Datenabruf sichtbar')
             except Exception as exc:messagebox.showerror('Speichern fehlgeschlagen',str(exc),parent=dialog)
-        ttk.Button(outer,text='Zuordnungen speichern',command=save_mapping).pack(anchor='e',pady=5)
+        save_button = ttk.Button(outer,text='Zuordnungen speichern', style='Accent.TButton', command=save_mapping)
+        save_button.pack(side='bottom', anchor='e',pady=5)
+        status_label.pack(side='bottom', anchor='w',pady=6)
+        tools.pack(side='bottom', fill='x',pady=3)
+        row.pack(side='bottom', fill='x', pady=7)
+        table_area.pack(fill='both', expand=True)
 
     def open_class_group_editor(self):
         """One main class per row, 16 group columns; Excel TSV and semicolons supported."""
         import re
         dialog = tk.Toplevel(self.root)
-        dialog.title('StundenplanBoard – Hauptklassen und Gruppen')
-        dialog.geometry('1250x730')
+        dialog.title('Schul-Board – Hauptklassen und Gruppen')
+        dialog.geometry(f'{min(1250, dialog.winfo_screenwidth() - 32)}x{min(730, dialog.winfo_screenheight() - 90)}')
         dialog.transient(self.root)
         frame = ttk.Frame(dialog, padding=12)
         frame.pack(fill='both', expand=True)
         ttk.Label(frame, text='Hauptklassen und Gruppen', font=('Segoe UI', 13, 'bold')).pack(anchor='w')
-        ttk.Label(frame, text='Spalte A: Hauptklasse; Spalten B–Q: bis zu 16 Gruppen. Excel-Bereich kopieren und mit Strg+V einfügen. '
-                  'Alternativ mehrere Gruppen mit Semikolon in einer Zelle trennen. Die Hauptklasse gilt automatisch als Gruppe.',
-                  wraplength=1200).pack(anchor='w', pady=(4, 8))
+        wrapping_label(frame, text='Spalte A: Hauptklasse; Spalten B–Q: bis zu 16 Gruppen. Excel-Bereich kopieren und mit Strg+V einfügen. '
+                  'Alternativ mehrere Gruppen mit Semikolon in einer Zelle trennen. Die Hauptklasse gilt automatisch als Gruppe.').pack(anchor='w', pady=(4, 8))
 
         # Stored format is API group -> list of main classes. Convert for editing.
         old = self.config.get('group_mappings') or {}
@@ -339,14 +504,15 @@ class Window:
 
         cols = ('class',) + tuple(f'g{i}' for i in range(1, 17))
         table_area = ttk.Frame(frame)
-        table_area.pack(fill='both', expand=True)
         tree = ttk.Treeview(table_area, columns=cols, show='headings', selectmode='extended')
         tree.heading('class', text='Hauptklasse')
-        tree.column('class', width=115, minwidth=95, stretch=False)
+        table_font = font.nametofont('TkDefaultFont', root=dialog)
+        class_width = max(115, table_font.measure('Hauptklasse') + 24)
+        tree.column('class', width=class_width, stretch=False)
         for i in range(1, 17):
             col = f'g{i}'
             tree.heading(col, text=f'Gruppe {i}')
-            tree.column(col, width=115, minwidth=85, stretch=False)
+            tree.column(col, width=max(115, table_font.measure('Gruppe 16') + 24), stretch=False)
         yscroll = ttk.Scrollbar(table_area, orient='vertical', command=tree.yview)
         xscroll = ttk.Scrollbar(table_area, orient='horizontal', command=tree.xview)
         tree.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
@@ -390,13 +556,14 @@ class Window:
 
         redraw()
         editor = ttk.Frame(frame)
-        editor.pack(fill='x', pady=(9, 4))
+
         cls_var = tk.StringVar()
         groups_var = tk.StringVar()
-        ttk.Label(editor, text='Hauptklasse:').pack(side='left')
-        ttk.Entry(editor, textvariable=cls_var, width=10).pack(side='left', padx=(4, 12))
-        ttk.Label(editor, text='Gruppen (Semikolon getrennt):').pack(side='left')
-        ttk.Entry(editor, textvariable=groups_var).pack(side='left', fill='x', expand=True, padx=5)
+        editor.columnconfigure(1, weight=1)
+        ttk.Label(editor, text='Hauptklasse:').grid(row=0, column=0, sticky='w')
+        ttk.Entry(editor, textvariable=cls_var, width=10).grid(row=0, column=1, sticky='w', padx=5)
+        ttk.Label(editor, text='Gruppen:').grid(row=1, column=0, sticky='w')
+        ttk.Entry(editor, textvariable=groups_var, width=12).grid(row=1, column=1, sticky='ew', padx=5)
 
         def select_row(_=None):
             selected = tree.selection()
@@ -413,10 +580,10 @@ class Window:
                 status.set('Zeile übernommen. Zum dauerhaften Speichern unten klicken.')
             except ValueError as exc:
                 messagebox.showerror('Eingabe prüfen', str(exc), parent=dialog)
-        ttk.Button(editor, text='Zeile übernehmen', command=apply).pack(side='left', padx=4)
+        ttk.Button(editor, text='Zeile übernehmen', command=apply).grid(row=1, column=2, sticky='e')
 
         buttons = ttk.Frame(frame)
-        buttons.pack(fill='x', pady=5)
+
 
         def paste(_=None):
             try:
@@ -455,9 +622,9 @@ class Window:
                 data.pop(cls, None)
             redraw()
 
-        ttk.Button(buttons, text='Aus Excel einfügen (Strg+V)', command=paste).pack(side='left', padx=(0, 8))
-        ttk.Button(buttons, text='Nach Excel kopieren (Strg+C)', command=copy).pack(side='left', padx=(0, 8))
-        ttk.Button(buttons, text='Ausgewählte Klassen entfernen', command=remove).pack(side='left')
+        ttk.Button(buttons, text='Aus Excel einfügen (Strg+V)', command=paste)
+        ttk.Button(buttons, text='Nach Excel kopieren (Strg+C)', command=copy)
+        ttk.Button(buttons, text='Ausgewählte Klassen entfernen', command=remove)
         tree.bind('<Control-v>', paste)
         tree.bind('<Control-V>', paste)
         tree.bind('<Control-c>', copy)
@@ -491,8 +658,9 @@ class Window:
                     msg = str(exc)
                     dialog.after(0, lambda: status.set('API-Abruf fehlgeschlagen: ' + msg))
             threading.Thread(target=work, daemon=True).start()
-        ttk.Button(buttons, text='Hauptklassen aus API übernehmen', command=fetch).pack(side='right')
-        ttk.Label(frame, textvariable=status, wraplength=1200).pack(anchor='w', pady=5)
+        ttk.Button(buttons, text='Hauptklassen aus API übernehmen', command=fetch)
+        flow_buttons(buttons)
+        status_label = wrapping_label(frame, textvariable=status)
 
         def save():
             # Keep the engine's established group -> classes representation.
@@ -507,11 +675,17 @@ class Window:
                 CONFIG.write_text(json.dumps(self.config, indent=2, ensure_ascii=False), encoding='utf-8')
                 board_engine.SETTINGS['group_mappings'] = mapping
                 board_engine.cache['at'] = 0
+                self.refresh_group_name_options()
                 self.status.set('Klassen- und Gruppenzuordnungen gespeichert')
                 dialog.destroy()
             except Exception as exc:
                 messagebox.showerror('Speichern fehlgeschlagen', str(exc), parent=dialog)
-        ttk.Button(frame, text='Zuordnungen speichern', command=save).pack(anchor='e', pady=5)
+        save_button = ttk.Button(frame, text='Zuordnungen speichern', style='Accent.TButton', command=save)
+        save_button.pack(side='bottom', anchor='e', pady=5)
+        status_label.pack(side='bottom', anchor='w', pady=5)
+        buttons.pack(side='bottom', fill='x', pady=5)
+        editor.pack(side='bottom', fill='x', pady=(9, 4))
+        table_area.pack(fill='both', expand=True)
 
     def choose_school_logo(self):
         path = filedialog.askopenfilename(title='Schullogo auswählen', filetypes=[('PNG-Bilder','*.png')])
@@ -531,16 +705,44 @@ class Window:
         try:
             cfg={key:int(var.get()) for key,var in self.values.items()}
             cfg['lan']=self.lan.get()
-            cfg['school_name']=self.school_name.get().strip() or 'StundenplanBoard'
+            cfg['school_name']=self.school_name.get().strip() or 'Musterschule'
             cfg['school_logo']=self.school_logo.get().strip()
             if cfg['school_logo'] and (not Path(cfg['school_logo']).is_file() or Path(cfg['school_logo']).suffix.lower() != '.png'):
                 raise ValueError('Bitte eine vorhandene PNG-Datei als Schullogo auswählen.')
             cfg['automatic_group_mapping']=self.automatic_group_mapping.get()
             for mapping_key in ('group_mappings','teacher_mappings','room_mappings'):
                 cfg[mapping_key]=self.config.get(mapping_key,{})
-            cfg['pdf_folder']=str(Path(self.pdf_folder.get()).expanduser().resolve())
-            if not cfg['pdf_folder']:raise ValueError('PDF-Ordner fehlt')
-            Path(cfg['pdf_folder']).mkdir(parents=True,exist_ok=True)
+            group_name_display = dict(self.config['group_name_display'])
+            for group, checked in self.group_name_options.items():
+                if checked.get() == board_engine.default_group_name_display(group):
+                    group_name_display.pop(group, None)
+                else:
+                    group_name_display[group] = checked.get()
+            cfg['group_name_display'] = group_name_display
+            duration = self.lesson_duration.get().strip()
+            if not re.fullmatch(r'[0-9]{1,4}', duration) or not 1 <= int(duration) < 1440:
+                raise ValueError('Bitte eine gültige Stundenlänge in ganzen Minuten eingeben.')
+            duration = int(duration)
+            cfg['lesson_duration'] = duration
+            lesson_times = {}
+            previous_end = ''
+            for period, value in self.lesson_times.items():
+                start = value.get()
+                if not start:
+                    continue
+                try:
+                    end = lesson_end(start, duration)
+                except ValueError as exc:
+                    raise ValueError(f'{period}. Stunde: {exc}') from exc
+                if start < previous_end:
+                    raise ValueError(f'{period}. Stunde: Die Unterrichtszeiten überschneiden sich oder sind falsch angeordnet.')
+                lesson_times[str(period)] = {'start': start, 'end': end}
+                previous_end = end
+            cfg['lesson_times'] = lesson_times
+            pdf_folder = self.pdf_folder.get().strip()
+            cfg['pdf_folder'] = str(Path(pdf_folder).expanduser().resolve()) if pdf_folder else ''
+            if cfg['pdf_folder']:
+                Path(cfg['pdf_folder']).mkdir(parents=True, exist_ok=True)
             if not 1024<=cfg['port']<=65535: raise ValueError('Port muss zwischen 1024 und 65535 liegen')
             if cfg['display_rows'] not in (1,2,3): raise ValueError('Bitte 1, 2 oder 3 Zeilen wählen')
             if cfg['refresh_seconds']<30 or cfg['course_seconds']<1 or cfg['pdf_seconds']<2: raise ValueError('Ungültige Zeitangabe')
@@ -614,7 +816,7 @@ class Window:
         webbrowser.open(f"http://127.0.0.1:{self.config['port']}")
 
     def check_updates(self):
-        """Prüft Releases asynchron; kein Download, keine Installation."""
+        """Prüft Releases im Hintergrund, ohne Dateien zu verändern."""
         self.status.set('Suche nach Schul-Board-Updates …')
         def run():
             result, message, url = updater.check_for_update()
@@ -640,6 +842,11 @@ class Window:
         self.root.destroy()
 
 if __name__=='__main__':
+    if os.name == 'nt':
+        import ctypes
+
+        # Set system DPI awareness before Tk creates its first window.
+        ctypes.windll.user32.SetProcessDPIAware()
     root=tk.Tk()
     try: ttk.Style().theme_use('vista')
     except tk.TclError: pass
