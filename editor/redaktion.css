@@ -3,3 +3,5 @@
 #panelTitle{font-family:Arial,sans-serif}
 
 #targets{display:flex;flex-wrap:wrap;gap:8px 16px;margin:12px 0;border:1px solid #c9d8ea;border-radius:5px}#targets label{display:flex;align-items:center;gap:4px}
+
+#logout{color:#14263a}

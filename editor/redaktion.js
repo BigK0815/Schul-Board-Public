@@ -62,7 +62,9 @@ function setupEditor() {
 
     let currentId = null, selectedImage = null, selection = null, timer, sequence = 0;
     const today = new Date().toLocaleDateString('sv-SE');
+    let draft = 0;
     function reset() {
+        draft++;
         currentId = null;
         $('allTargets').checked = true;
         $('mode').value = 'info';
@@ -121,7 +123,14 @@ function setupEditor() {
     });
     edit.addEventListener('paste', event => {
         event.preventDefault();
-        document.execCommand('insertText', false, event.clipboardData.getData('text/plain'));
+        const clipboard = event.clipboardData;
+        const image = [...clipboard.items]
+            .find(item => item.kind === 'file' && item.type.startsWith('image/'))?.getAsFile();
+        if (image) {
+            insertImage(image);
+            return;
+        }
+        document.execCommand('insertText', false, clipboard.getData('text/plain'));
         schedule();
     });
     edit.addEventListener('drop', event => event.preventDefault());
@@ -191,24 +200,32 @@ function setupEditor() {
     };
     $('imageButton').onmousedown = event => event.preventDefault();
     $('imageButton').onclick = () => $('imageFile').click();
-    $('imageFile').onchange = async () => {
+    $('imageFile').onchange = () => {
         const file = $('imageFile').files[0];
-        if (!file) return;
+        $('imageFile').value = '';
+        if (file) insertImage(file);
+    };
+
+    async function insertImage(file) {
+        const insertion = selection?.cloneRange();
+        const originalDraft = draft;
         const form = new FormData();
         form.append('image', file);
         try {
             const {src} = await api('image', 'POST', form);
+            if (originalDraft !== draft) return;
+            const existingImages = new Set(edit.querySelectorAll('img'));
+            selection = insertion;
             restore();
             document.execCommand('insertHTML', false, '<img alt="" style="width:60%" src="' + src + '">');
-            const image = [...edit.querySelectorAll('img')].find(item => item.getAttribute('src') === src);
+            const image = [...edit.querySelectorAll('img')].find(item => !existingImages.has(item));
             if (image) {
                 image.addEventListener('load', positionHandle, {once:true});
                 selectImage(image);
             }
             schedule();
         } catch (error) { show(error.message); }
-        finally { $('imageFile').value = ''; }
-    };
+    }
 
     async function refreshList() {
         const rows = await api('announcements');
