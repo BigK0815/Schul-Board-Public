@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="de"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Schul-Board · Redaktion</title>
+<link rel="stylesheet" href="/editor/redaktion.css"><link rel="stylesheet" href="/editor/meldung.css">
+<body data-csrf="{{ csrf }}" data-monitors="{{ monitors|tojson|forceescape }}">
+<header><strong>Schul-Board · Redaktion</strong>{% if authenticated %}<button id="logout">Abmelden</button>{% endif %}</header>
+{% if authenticated %}
+<main>
+<section class="card">
+<h1 id="heading">Neue Meldung</h1>
+<label>Titel für die Übersicht<input id="title" maxlength="150"></label>
+<fieldset id="targets"><legend>Zielmonitore</legend>
+<label><input type="checkbox" id="allTargets" checked>Alle Monitore</label>
+{% for item in monitors %}<label><input type="checkbox" class="target" value="{{ item.id }}">{{ item.name }}</label>{% endfor %}
+</fieldset>
+<label>Darstellung<select id="mode"><option value="info">Infoteil</option><option value="fullscreen">Vollbild</option></select></label>
+<div id="toolbar" role="group" aria-label="Formatierung">
+<select id="family" aria-label="Schriftart"><option>Arial</option><option>Calibri</option><option>Segoe UI</option><option>Georgia</option><option>Verdana</option><option>Times New Roman</option></select>
+<select id="size" aria-label="Schriftgröße">{% for n in [12,14,16,18,20,24,28,32,36,42,48,56,64,72] %}<option {% if n == 24 %}selected{% endif %}>{{ n }}</option>{% endfor %}</select>
+<button data-command="bold" title="Fett"><b>F</b></button><button data-command="italic" title="Kursiv"><i>K</i></button><button data-command="underline" title="Unterstreichen"><u>U</u></button>
+<input id="color" type="color" aria-label="Textfarbe" value="#14263a">
+<button data-command="justifyLeft">Links</button><button data-command="justifyCenter">Mittig</button><button data-command="justifyRight">Rechts</button>
+<button data-command="insertUnorderedList">Liste</button><button data-command="insertOrderedList">Nummerierung</button>
+<button data-command="undo" title="Rückgängig">↶</button><button data-command="redo" title="Wiederholen">↷</button>
+<button data-command="removeFormat">Format löschen</button>
+<button id="imageButton">Bild einfügen</button><input id="imageFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+</div>
+<div class="edit-wrap"><div id="edit" class="meldung" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Meldungstext"></div><button id="handle" type="button" hidden aria-label="Bildgröße ändern"></button></div>
+<div class="actions">
+<label>Anzeigen ab<input type="date" id="starts"></label>
+<label>Anzeigen bis<input type="date" id="ends"></label>
+<button id="publish" class="primary">Veröffentlichen</button>
+</div>
+<h2>Meldungen</h2><button id="new">Neue Meldung</button><ul id="list"></ul>
+</section>
+<section class="card"><div class="preview-header"><h2>Live-Vorschau</h2><span id="dimensions"></span></div>
+<label>Vorschau für<select id="previewMonitor"></select></label><div id="stage"><div id="panel"><div id="panelTitle">Infos &amp; Termine</div><div id="preview" class="meldung"></div></div></div>
+<p id="fit" role="status"></p></section>
+</main>
+{% else %}
+<form id="login" class="card login"><h1>Redaktion anmelden</h1>
+<label>Redaktionspasswort<input id="password" type="password" autocomplete="current-password" required autofocus></label>
+<button class="primary">Anmelden</button></form>
+{% endif %}
+<p id="status" role="status"></p>
+<script src="/editor/redaktion.js" defer></script>
+</body></html>

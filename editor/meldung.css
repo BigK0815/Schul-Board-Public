@@ -1,0 +1,5 @@
+.meldung{box-sizing:border-box;width:100%;height:100%;padding:20px;background:white;color:#14263a;font:24px/1.35 Arial,sans-serif;overflow:hidden;overflow-wrap:anywhere}
+.meldung *{box-sizing:border-box}
+.meldung img{display:block;max-width:100%;height:auto}
+.meldung h1,.meldung h2,.meldung h3,.meldung p{margin:0 0 .65em}
+.meldung blockquote{margin:0 0 .65em;padding-left:.65em;border-left:3px solid #c9dff3}

@@ -5,17 +5,33 @@ from pathlib import Path
 import hashlib
 import fitz
 from threading import Lock
+from contextvars import ContextVar
+from werkzeug.local import LocalProxy
 
 from schuldaten import SchoolData
+from redaktion import ROOT, active_slides, announcement_html
 
 from flask import Flask, jsonify, render_template_string, Response, abort, send_file
 
-SETTINGS = {'switch_seconds':15,'course_seconds':4,'cutoff_hour':15,'start_grade':5,'display_rows':2,'info_width':33,'visible_periods':list(range(1, 9)),'pdf_folder':'','pdf_seconds':12,'group_mappings':{},'group_name_display':None,'group_custom_names':{},'hidden_groups':[],'hidden_grades':[],'school_name':'Musterschule','school_logo':'','automatic_group_mapping':False}
+DEFAULT_SETTINGS = {'switch_seconds':15,'course_seconds':4,'cutoff_hour':15,'start_grade':5,'display_rows':2,'info_width':33,'visible_periods':list(range(1, 9)),'pdf_folder':'','pdf_seconds':12,'group_mappings':{},'group_name_display':None,'group_custom_names':{},'hidden_groups':[],'hidden_grades':[],'school_name':'Musterschule','school_logo':'','automatic_group_mapping':False}
+
+monitor_context = ContextVar('monitor_context', default=None)
+SETTINGS = LocalProxy(lambda: DEFAULT_SETTINGS if monitor_context.get() is None else monitor_context.get())
 
 app = Flask(__name__)
-cache = {'key': None, 'data': None}
+cache = {}
 lock = Lock()
 school_data = None
+
+
+def monitor_app(settings):
+    def application(environ, start_response):
+        token = monitor_context.set(settings)
+        try:
+            return app(environ, start_response)
+        finally:
+            monitor_context.reset(token)
+    return application
 
 
 def source_for(token=None):
@@ -27,18 +43,19 @@ def source_for(token=None):
         if school_data is not None:
             school_data.session.close()
         school_data = SchoolData(token)
-        cache.update(key=None, data=None)
+        cache.clear()
     return school_data
 
 
 def update_groups(token):
     with lock:
         updated, mapping = source_for(token).group_snapshot(datetime.now(), force=True)
-        cache.update(key=None, data=None)
+        cache.clear()
         return updated, mapping
 
 
 HTML = '''<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>__SCHOOL_NAME__ · Stundenplan</title>
+<link rel="stylesheet" href="/assets/meldung.css">
 <style>
 *{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;overflow:hidden}body{font-family:Arial,'Segoe UI',sans-serif;color:#14263a;background:#eaf3fc}
 :root{--navy:#103d61;--ink:#123651;--grid:#b4cce0;--soft:#e8f3fc;--board-gap:clamp(12px,1.5vw,28px);--font:clamp(9px,.86vw,17px);--small:clamp(7px,.7vw,14px)}
@@ -92,6 +109,9 @@ main{height:calc(100dvh - clamp(54px,8.4vh,90px));display:grid;grid-template-col
 #infonote .note-message{font-size:clamp(12px,1.35vw,25px);font-weight:600;line-height:1.35;overflow-wrap:anywhere;white-space:pre-wrap}
 #infonote .note-message + .note-message{margin-top:1.35em}
 #infocontent{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;background:#fff;overflow:hidden}
+#infoannouncement{display:none}
+#fullscreen{display:none;position:fixed;inset:0;z-index:20}
+#fullscreen.active{display:block}
 #infoimage{display:none;width:100%;height:100%;object-fit:contain}
 #infoempty{padding:20px;text-align:center;color:#52657a;font-size:clamp(13px,1.2vw,20px)}
 #infocaption{height:clamp(19px,2.5vh,27px);display:flex;align-items:center;justify-content:center;color:#5b7184;font-size:clamp(9px,.72vw,13px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;background:#f1f5fa}
@@ -112,7 +132,7 @@ main{height:calc(100dvh - clamp(54px,8.4vh,90px));display:grid;grid-template-col
 .slot.current-period:not(.canceled),.hour-column .hour.current-period{background:#79e64e!important}
 </style></head><body>
 <header><img src="/assets/schullogo.png" alt="Schullogo"><h1>__SCHOOL_NAME__</h1><div id="clock"></div></header>
-<main><div id="left"><div id="board"></div></div><aside id="infoboard"><div id="infohead">Infos &amp; Termine</div><div id="infocontent"><div id="infonote"></div><img id="infoimage" alt="Informationen aus PDF"><div id="infoempty">Keine PDF-Dateien im Info-Ordner</div></div></aside></main><div id="copyright">(c) 2026 Robert Kettmann</div>
+<main><div id="left"><div id="board"></div></div><aside id="infoboard"><div id="infohead">Infos &amp; Termine</div><div id="infocontent"><div id="infonote"></div><div id="infoannouncement" class="meldung"></div><img id="infoimage" alt="Informationen aus PDF"><div id="infoempty">Keine PDF-Dateien im Info-Ordner</div></div></aside></main><div id="fullscreen" class="meldung"></div><div id="copyright">(c) 2026 Robert Kettmann</div>
 <script>
 const BOARD_SETTINGS=__BOARD_SETTINGS_JSON__;
 let data=null,index=0,lastChange=Date.now(),coursePhase=0,notePhase=0;
@@ -251,16 +271,35 @@ function markCurrentPeriod(now){
 }
 function updateClock(){const now=new Date();document.getElementById('clock').textContent=new Intl.DateTimeFormat('de-DE',{weekday:'short',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}).format(now);markCurrentPeriod(now);}
 let infoSlides=[],infoIndex=0,infoSignature='',currentInfoKey='';
-function allInfoSlides(){return [...notePages(),...infoSlides.map(slide=>({kind:'pdf',...slide}))];}
+function allInfoSlides(){
+ const full=infoSlides.filter(slide=>slide.mode==='fullscreen');
+ return full.length?full:[...notePages(),...infoSlides.map(slide=>({kind:'pdf',...slide}))];
+}
 function refreshInfoDisplay(){
  const slides=allInfoSlides();
+ const announcement=document.getElementById('infoannouncement');
+ const fullscreen=document.getElementById('fullscreen');
+ announcement.style.display='none';
  const img=document.getElementById('infoimage'),empty=document.getElementById('infoempty'),note=document.getElementById('infonote');
- if(!slides.length){img.style.display='none';img.removeAttribute('src');note.style.display='none';empty.style.display='block';currentInfoKey='';return;}
+ if(!slides.length){fullscreen.classList.remove('active');img.style.display='none';img.removeAttribute('src');note.style.display='none';empty.style.display='block';currentInfoKey='';return;}
  infoIndex%=slides.length;
  const slide=slides[infoIndex];
+ const full=slide.mode==='fullscreen';
+ fullscreen.classList.toggle('active',full);
  if(slide.kind==='note'){
   img.style.display='none';img.removeAttribute('src');empty.style.display='none';note.style.display='flex';
   note.innerHTML=noteMarkup(slide.groups);currentInfoKey='note:'+infoIndex;
+ }else if(slide.kind==='announcement'){
+  img.style.display='none';empty.style.display='none';note.style.display='none';
+  const target=full?fullscreen:announcement;
+  if(currentInfoKey!==slide.url){
+   currentInfoKey=slide.url;target.innerHTML='';
+   fetch(slide.url,{cache:'no-store'}).then(r=>r.ok?r.json():null).then(result=>{
+    if(result&&currentInfoKey===slide.url)target.innerHTML=result.html;
+    else if(!result&&currentInfoKey===slide.url){currentInfoKey='';fullscreen.classList.remove('active');}
+   }).catch(()=>{if(currentInfoKey===slide.url)currentInfoKey='';});
+  }
+  if(!full)announcement.style.display='block';
  }else{
   note.style.display='none';empty.style.display='none';img.style.display='block';
   if(currentInfoKey!==slide.url)img.src=slide.url;
@@ -685,12 +724,15 @@ def refresh_board():
         updated, mapping = source.group_snapshot(now)
         substitutions = source.substitution_days(days)
         key = (now.date(), tuple(days), updated, tuple(stamp for stamp, _ in substitutions))
-        if cache['key'] != key:
+        monitor_id = SETTINGS.get('id', 1)
+        cached_key, cached_data = cache.get(monitor_id, (None, None))
+        if cached_key != key:
             published = [day for _, day in substitutions if day is not None]
             data = build_week(days, timetable, published, mapping, source.read('jahrgaenge-cache')[1])
             data['lesson_times'] = lesson_times
-            cache.update(data=data, key=key)
-        return cache['data']
+            cache[monitor_id] = (key, data)
+            return data
+        return cached_data
 
 
 @app.get('/api/week')
@@ -735,9 +777,22 @@ def info_files():
     return sorted(files, key=lambda p: p.name.casefold())
 
 
+@app.get('/assets/meldung.css')
+def announcement_styles():
+    return send_file(ROOT / 'editor' / 'meldung.css', mimetype='text/css')
+
+
+@app.get('/api/info/announcement/<int:number>')
+def board_announcement(number):
+    html = announcement_html(number, SETTINGS.get('id', 1))
+    if html is None:
+        abort(404)
+    return jsonify(html=html)
+
+
 @app.get('/api/info/list')
 def info_list():
-    slides = []
+    slides = active_slides(SETTINGS.get('id', 1))
     for file in info_files():
         try:
             with fitz.open(file) as doc:

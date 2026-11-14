@@ -120,7 +120,8 @@ class SchoolData:
 
     def substitution_days(self, days):
         wanted = {day.isoformat() for day in days}
-        self.days = {key: value for key, value in self.days.items() if key in wanted}
+        self.days = {key: value for key, value in self.days.items()
+                     if key in wanted or monotonic() - value[0] < SUBSTITUTION_SECONDS}
         for day in days:
             day_iso = day.isoformat()
             previous = self.days.get(day_iso)
@@ -135,7 +136,8 @@ class SchoolData:
                     self.days[day_iso] = (monotonic(), day_data)
                 except (requests.RequestException, ValueError, KeyError, TypeError) as error:
                     self.days[day_iso] = (monotonic(), error)
-        for _, value in self.days.values():
+        for key in wanted:
+            _, value = self.days[key]
             if isinstance(value, Exception):
                 raise value
         return tuple(self.days[day.isoformat()] for day in days)

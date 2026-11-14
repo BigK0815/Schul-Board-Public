@@ -26,6 +26,21 @@ Die Gruppenzuordnung wird alle sieben Tage erneuert und kann unter **Klassen & G
 
 Schuleinstellungen und zwischengespeicherte Plandaten liegen lokal. Der Token wird über den Windows-Anmeldespeicher verwaltet. Die Beispielversion enthält den Namen „Musterschule“ und ein fiktives Schullogo. Zugangsdaten, echte Schulpläne und ausgefüllte Schuleinstellungen gehören nicht zum Download.
 
+## Monitorprofile
+
+Unter **Anzeige & PDFs → Monitorprofile** lassen sich 1 bis 10 Monitore einrichten. Pro Monitor werden Name, Port, Auflösung, Infobreite, sichtbare Stunden, Jahrgänge, Wechselzeiten und PDF-Ordner eingestellt. Die Standardports sind 5001 bis 5010. Eine bestehende Einzelmonitor-Einstellung wird als erstes Profil übernommen, einschließlich ihres Ports.
+
+Nach dem Start zeigt die Verwaltung die Adressen an. Auf jedem Monitor wird die URL seines Profils im Vollbildbrowser geöffnet. Die Monitore verwenden denselben Datenabruf für den Stundenplan.
+
+## Redaktion für Infos & Termine
+
+1. Unter **API & Server → Redaktion** die Web-Redaktion aktivieren. Der voreingestellte Port ist **8081**. Board und Redaktion benötigen unterschiedliche Ports.
+2. Ein gemeinsames Redaktionspasswort setzen. Die Vorschau verwendet Auflösung und Infobreite des gewählten Monitorprofils.
+3. Speichern und das Board starten. **Redaktion öffnen** öffnet den Editor auf dem Server-PC. Bei aktivierter Schulnetzfreigabe ist die Redaktion über die IP des Server-PCs und den Redaktionsport erreichbar.
+4. Eine Meldung mit Titel, formatiertem Text, Bildern und Anzeigezeitraum veröffentlichen. Bilder lassen sich an der unteren rechten Ecke proportional vergrößern und verkleinern. Meldungen können an einzelne, mehrere oder alle Monitore gesendet werden. Im Infoteil wechseln sie sich mit Tageshinweisen und PDFs ab. Aktive Vollbildmeldungen ersetzen auf ihren Zielmonitoren den Stundenplan und wechseln sich bei Überschneidungen ab. Nach Ablauf erscheint wieder das normale Board.
+
+Das Redaktionspasswort wird im Windows-Anmeldespeicher gespeichert. Meldungen bleiben lokal in einer SQLite-Datei erhalten. Für den Netzwerkzugriff über eine verschlüsselte Verbindung kann die Schul-IT einen HTTPS-Reverse-Proxy vor die Redaktion setzen.
+
 ## Betrieb und Updates
 
 Das Board ist standardmäßig nur auf dem eigenen Rechner erreichbar. Unter **API & Server → Im Schulnetz erreichbar** kann die Anzeige für Geräte im Schulnetz freigegeben werden. Diese Geräte können die dargestellten Pläne und Aushänge abrufen.

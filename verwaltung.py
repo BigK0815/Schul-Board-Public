@@ -13,13 +13,16 @@ import requests
 from waitress import create_server
 import board_engine
 import updater
+from redaktion import editor_app
+from monitorprofile import FIELDS, default_profile, load_profiles, validate_profiles
 from verwaltungsstil import SettingsViewport, apply_style, card, toggle, flow_buttons
 
 ROOT = Path(os.environ.get('APPDATA', str(Path.home()))) / 'StundenplanBoard'
 CONFIG = ROOT / 'einstellungen.json'
 SERVICE = 'StundenplanBoard-beste.schule'
 ACCOUNT = 'api-token'
-DEFAULT = {'port':5000,'lan':False,'switch_seconds':15,
+EDITOR_ACCOUNT = 'redaktionspasswort'
+DEFAULT = {'port':5000,'editor_port':8081,'editor_enabled':False,'board_width':1920,'board_height':1080,'lan':False,'switch_seconds':15,
            'course_seconds':4,'cutoff_hour':15,'start_grade':5,'display_rows':2,'info_width':33,'visible_periods':list(range(1, 9)),'pdf_folder':'','pdf_seconds':12,'group_mappings':{},'group_name_display':None,'group_custom_names':{},'hidden_groups':[],'hidden_grades':[],'show_unassigned':True,'school_name':'Musterschule','school_logo':'','automatic_group_mapping':False}
 
 def natural_name_key(name):
@@ -65,9 +68,12 @@ class Window:
         apply_style(root)
         ROOT.mkdir(parents=True, exist_ok=True)
         try: self.config = {**DEFAULT, **json.loads(CONFIG.read_text(encoding='utf-8'))}
-        except (FileNotFoundError, ValueError): self.config = dict(DEFAULT)
+        except (FileNotFoundError, ValueError): self.config = {}
+        profiles = load_profiles(self.config)
+        self.config = {**DEFAULT, **self.config}
         self.values = {}
-        self.server = None
+        self.servers = []
+        self.editor_server = None
         self.running = False
 
         shell = ttk.Frame(root, padding=12)
@@ -130,52 +136,41 @@ class Window:
         server = card(api, 'Server')
         toggle(server, 'Im Schulnetz erreichbar', self.lan).pack(anchor='w')
 
-        settings = self.pages['Anzeige & PDFs']
-        options = ttk.Frame(card(settings, 'Anzeigeeinstellungen'), style='Card.TFrame')
-        options.pack(fill='x')
-        entries = [
-            ('port','Server-Port',[5000,5050,8080]),
-            ('switch_seconds','Jahrgang wechseln (Sekunden)',[0,10,15,20,25,30]),
-            ('course_seconds','Kurse durchblättern (Sekunden)',[2,3,4,5,6,8]),
-            ('cutoff_hour','Tageswechsel (Uhrzeit)',[12,13,14,15,16,17,18]),
-            ('start_grade','Start-Jahrgang',[5,6,7,8,9,10]),
-            ('display_rows','Jahrgänge nebeneinander',[1,2,3]),
-            ('pdf_seconds','PDF-Seite anzeigen (Sekunden)',[5,8,10,12,15,20,30,45,60])]
-        for i, (key, label, choices) in enumerate(entries):
-            row = ttk.Frame(options, style='Card.TFrame')
-            row.grid(row=i//2, column=i%2, sticky='ew', padx=(0, 8), pady=2)
-            ttk.Label(row, text=label, style='Card.TLabel').pack(anchor='w')
-            v = tk.StringVar(value=str(self.config[key]))
-            self.values[key] = v
-            ttk.Combobox(row, textvariable=v, values=choices,
-                         state='readonly', width=12, style='Compact.TCombobox').pack(anchor='w')
-        width_row = ttk.Frame(options, style='Card.TFrame')
-        width_row.grid(row=len(entries)//2, column=len(entries)%2, sticky='ew', padx=(0, 8), pady=2)
-        ttk.Label(width_row, text='Infobreite (% der Bildschirmbreite)',
-                  style='Card.TLabel').pack(anchor='w')
-        self.values['info_width'] = tk.StringVar(value=str(self.config['info_width']))
-        ttk.Spinbox(width_row, from_=10, to=60, width=10,
-                    textvariable=self.values['info_width']).pack(anchor='w')
-        options.columnconfigure(0, weight=1)
-        options.columnconfigure(1, weight=1)
-        periods = card(settings, 'Stunden auf dem Board')
-        period_grid = ttk.Frame(periods, style='Card.TFrame')
-        period_grid.pack(fill='x')
-        self.visible_periods = {}
-        for number in range(11):
-            selected = tk.BooleanVar(value=number in self.config['visible_periods'])
-            self.visible_periods[number] = selected
-            ttk.Checkbutton(period_grid, text=f'{number}.', variable=selected,
-                            style='GroupName.TCheckbutton').grid(
-                row=number//6, column=number%6, sticky='w', padx=(0, 8), pady=2)
+        editor = card(api, 'Redaktion')
+        self.editor_enabled = tk.BooleanVar(value=self.config['editor_enabled'])
+        toggle(editor, 'Web-Redaktion aktivieren', self.editor_enabled).pack(anchor='w')
+        ttk.Label(editor, text='Redaktionsport', style='Card.TLabel').pack(anchor='w')
+        self.values['editor_port'] = tk.StringVar(value=str(self.config['editor_port']))
+        ttk.Entry(editor, textvariable=self.values['editor_port'], width=9).pack(anchor='w', pady=6)
+        ttk.Label(editor, text='Redaktionspasswort (leer = gespeichertes Passwort behalten)',
+                  style='Card.TLabel', wraplength=430).pack(anchor='w')
+        self.editor_password = ttk.Entry(editor, show='•')
+        self.editor_password.pack(fill='x', pady=6)
+        ttk.Button(editor, text='Redaktion öffnen', command=self.open_editor).pack(anchor='w')
 
-        pdf = card(settings, 'Infoboard-PDFs')
-        ttk.Label(pdf, text='Ordner für Info-PDFs', style='Card.TLabel').pack(anchor='w')
-        self.pdf_folder = tk.StringVar(value=str(self.config['pdf_folder']))
-        pdfrow = ttk.Frame(pdf, style='Card.TFrame')
-        pdfrow.pack(fill='x', pady=5)
-        ttk.Entry(pdfrow, textvariable=self.pdf_folder).pack(side='left', fill='x', expand=True)
-        ttk.Button(pdfrow, text='Auswählen …', command=self.choose_pdf_folder).pack(side='left', padx=5)
+        settings = self.pages['Anzeige & PDFs']
+        monitor = card(settings, 'Monitorprofile')
+        selector = ttk.Frame(monitor, style='Card.TFrame')
+        selector.pack(fill='x')
+        ttk.Label(selector, text='Anzahl der Monitore', style='Card.TLabel').pack(side='left')
+        self.monitor_count = tk.StringVar(value=str(len(profiles)))
+        count_box = ttk.Combobox(selector, textvariable=self.monitor_count,
+                                 values=list(range(1, 11)), state='readonly', width=4)
+        count_box.pack(side='left', padx=8)
+        self.monitor_selection = ttk.Combobox(selector, state='readonly', width=22)
+        self.monitor_selection.pack(side='left', padx=8)
+        self.monitor_panel = ttk.Frame(monitor, style='Card.TFrame')
+        self.monitor_panel.pack(fill='x', pady=8)
+        self.profile_vars = []
+        for number in range(1, 11):
+            model = {**default_profile(number), **(profiles[number-1] if number <= len(profiles) else {})}
+            self.profile_vars.append({
+                key: tk.StringVar(value=','.join(map(str, value)) if isinstance(value, list) else str(value))
+                for key, value in model.items()
+            })
+        count_box.bind('<<ComboboxSelected>>', lambda event: self.select_monitor())
+        self.monitor_selection.bind('<<ComboboxSelected>>', lambda event: self.show_monitor())
+        self.select_monitor()
 
         groups_page = self.pages['Klassen & Gruppen']
         group_refresh = card(groups_page, 'Gruppenzuordnung')
@@ -510,9 +505,60 @@ class Window:
         path = filedialog.askopenfilename(title='Schullogo auswählen', filetypes=[('PNG-Bilder','*.png')])
         if path: self.school_logo.set(path)
 
-    def choose_pdf_folder(self):
-        folder=filedialog.askdirectory(title='Ordner für Info-PDFs auswählen',initialdir=self.pdf_folder.get() if Path(self.pdf_folder.get()).is_dir() else str(Path.home()))
-        if folder:self.pdf_folder.set(folder)
+    def select_monitor(self):
+        index = max(0, self.monitor_selection.current())
+        count = int(self.monitor_count.get())
+        self.update_monitor_names()
+        self.monitor_selection.current(min(index, count-1))
+        self.show_monitor()
+
+    def update_monitor_names(self, _event=None):
+        index = self.monitor_selection.current()
+        self.monitor_selection.configure(values=[
+            f"{i+1} · {model['name'].get()}" for i, model in enumerate(
+                self.profile_vars[:int(self.monitor_count.get())])
+        ])
+        self.monitor_selection.current(max(0, min(index, int(self.monitor_count.get())-1)))
+
+    def show_monitor(self):
+        for child in self.monitor_panel.winfo_children():
+            child.destroy()
+        model = self.profile_vars[self.monitor_selection.current()]
+        fields = [('name', 'Monitorname'), *((key, label) for key, label, *_ in FIELDS),
+                  ('visible_periods', 'Sichtbare Stunden (z. B. 1,2,3,4,5,6,7,8)'),
+                  ('hidden_grades', 'Ausgeblendete Jahrgänge (z. B. 11,12)'),
+                  ('pdf_folder', 'PDF-Ordner')]
+        self.monitor_panel.columnconfigure(1, weight=1)
+        for row, (key, label) in enumerate(fields):
+            ttk.Label(self.monitor_panel, text=label, style='Card.TLabel').grid(
+                row=row, column=0, sticky='w', padx=(0, 8), pady=3)
+            entry = ttk.Entry(self.monitor_panel, textvariable=model[key])
+            entry.grid(row=row, column=1, sticky='ew', pady=3)
+            if key == 'name':
+                entry.bind('<FocusOut>', self.update_monitor_names)
+            if key == 'pdf_folder':
+                ttk.Button(self.monitor_panel, text='Auswählen …',
+                           command=lambda: self.choose_monitor_folder(model[key])).grid(row=row, column=2)
+        self.viewport.bind_controls(self.monitor_panel)
+        self.viewport.after_idle(self.viewport.refresh)
+
+    def choose_monitor_folder(self, variable):
+        folder = filedialog.askdirectory(title='Ordner für Info-PDFs auswählen')
+        if folder:
+            variable.set(folder)
+
+    def monitor_settings(self):
+        profiles = []
+        for index, model in enumerate(self.profile_vars[:int(self.monitor_count.get())], 1):
+            profile = {key: variable.get() for key, variable in model.items()}
+            profile['id'] = index
+            for key, minimum, maximum in (('visible_periods', 0, 10), ('hidden_grades', 1, 13)):
+                values = sorted({int(value.strip()) for value in profile[key].split(',') if value.strip()})
+                if any(not minimum <= value <= maximum for value in values):
+                    raise ValueError(f"Monitor {index}: Werte müssen zwischen {minimum} und {maximum} liegen.")
+                profile[key] = values
+            profiles.append(profile)
+        return profiles
 
     def get_token(self):
         return self.token.get().strip() or keyring.get_password(SERVICE,ACCOUNT) or ''
@@ -549,19 +595,17 @@ class Window:
                 else:
                     custom_names.pop(name, None)
             cfg['group_custom_names'] = custom_names
-            pdf_folder = self.pdf_folder.get().strip()
-            cfg['pdf_folder'] = str(Path(pdf_folder).expanduser().resolve()) if pdf_folder else ''
-            if cfg['pdf_folder']:
-                Path(cfg['pdf_folder']).mkdir(parents=True, exist_ok=True)
-            if not 1024<=cfg['port']<=65535: raise ValueError('Port muss zwischen 1024 und 65535 liegen')
-            if not 10 <= cfg['info_width'] <= 60:
-                raise ValueError('Die Infobreite muss zwischen 10 und 60 Prozent liegen.')
-            cfg['visible_periods'] = [number for number, selected in self.visible_periods.items()
-                                      if selected.get()]
-            if not cfg['visible_periods']:
-                raise ValueError('Bitte mindestens eine Stunde für die Anzeige auswählen.')
-            if cfg['display_rows'] not in (1,2,3): raise ValueError('Bitte 1, 2 oder 3 Zeilen wählen')
-            if cfg['course_seconds']<1 or cfg['pdf_seconds']<2: raise ValueError('Ungültige Zeitangabe')
+            cfg['editor_enabled'] = self.editor_enabled.get()
+            if not 1024 <= cfg['editor_port'] <= 65535:
+                raise ValueError('Redaktionsport muss zwischen 1024 und 65535 liegen.')
+            cfg['monitors'] = self.monitor_settings()
+            validate_profiles(cfg['monitors'], cfg['editor_port'] if cfg['editor_enabled'] else None)
+            password = self.editor_password.get()
+            if cfg['editor_enabled'] and not (password or keyring.get_password(SERVICE, EDITOR_ACCOUNT)):
+                raise ValueError('Bitte ein Redaktionspasswort eingeben.')
+            if password:
+                keyring.set_password(SERVICE, EDITOR_ACCOUNT, password)
+                self.editor_password.delete(0, 'end')
             if self.token.get().strip():
                 keyring.set_password(SERVICE,ACCOUNT,self.token.get().strip())
                 self.token.delete(0,'end')
@@ -599,51 +643,67 @@ class Window:
             return
         os.environ['BESTE_TOKEN']=token
         with board_engine.lock:
-            board_engine.SETTINGS.update({k:v for k,v in self.config.items() if k in board_engine.SETTINGS})
-            board_engine.cache.update(key=None, data=None)
-        host='0.0.0.0' if self.config['lan'] else '127.0.0.1'
+            board_engine.cache.clear()
+        host = '0.0.0.0' if self.config['lan'] else '127.0.0.1'
         try:
-            self.server=create_server(board_engine.app,host=host,port=self.config['port'],threads=4)
-        except Exception as e:
-            messagebox.showerror('Server konnte nicht starten',str(e));return
-        self.running=True
-        self.start_btn.configure(state='disabled');self.stop_btn.configure(state='normal')
+            for profile in self.config['monitors']:
+                settings = {**board_engine.DEFAULT_SETTINGS, **self.config, **profile}
+                settings['hidden_grades'] = sorted(set(self.config['hidden_grades']) | set(profile['hidden_grades']))
+                self.servers.append(create_server(board_engine.monitor_app(settings), host=host,
+                                                  port=profile['port'], threads=4))
+            if self.config['editor_enabled']:
+                editor = editor_app(keyring.get_password(SERVICE, EDITOR_ACCOUNT), self.config['monitors'])
+                self.editor_server = create_server(editor, host=host, port=self.config['editor_port'],
+                                                   threads=4, max_request_body_size=12 * 1024 * 1024)
+        except Exception as error:
+            for server in self.servers:
+                server.close()
+            self.servers.clear()
+            messagebox.showerror('Server konnte nicht starten', str(error))
+            return
+        self.running = True
+        self.start_btn.configure(state='disabled')
+        self.stop_btn.configure(state='normal')
         self.status.set('Server läuft')
-        url=f"http://127.0.0.1:{self.config['port']}"
-        self.address.set('Auf diesem PC: '+url+ (' | Im Schulnetz: http://<IP-des-Servers>:'+str(self.config['port']) if self.config['lan'] else ''))
-        threading.Thread(target=self.serve,daemon=True).start()
-        self.refresh_stop = threading.Event()
-        threading.Thread(target=self.refresh_board, args=(self.refresh_stop,), daemon=True).start()
+        address = '<IP-des-Servers>' if self.config['lan'] else '127.0.0.1'
+        links = [f"{item['name']}: http://{address}:{item['port']}" for item in self.config['monitors']]
+        if self.editor_server:
+            links.append(f"Redaktion: http://{address}:{self.config['editor_port']}")
+            threading.Thread(target=self.serve, args=(self.editor_server,), daemon=True).start()
+        self.address.set(' | '.join(links))
+        for server in self.servers:
+            threading.Thread(target=self.serve, args=(server,), daemon=True).start()
 
-    @staticmethod
-    def refresh_board(stop):
-        while not stop.is_set():
-            try:
-                board_engine.refresh_board()
-            except Exception:
-                # The board's API reports failures to connected displays.
-                pass
-            stop.wait(5)
 
-    def serve(self):
-        try: self.server.run()
+    def serve(self, server):
+        try: server.run()
         except Exception as e:
             msg=str(e)
             self.root.after(0,lambda: self.status.set('Serverfehler: '+msg))
 
     def stop(self):
         if not self.running:return
-        self.refresh_stop.set()
-        try: self.server.close()
-        except Exception:pass
-        self.server=None;self.running=False
+        for server in self.servers:
+            server.close()
+        self.servers.clear()
+        if self.editor_server is not None:
+            self.editor_server.close()
+            self.editor_server = None
+        self.running=False
         self.start_btn.configure(state='normal');self.stop_btn.configure(state='disabled')
         self.status.set('Server gestoppt');self.address.set('')
 
     def open(self):
         if not self.running:
             messagebox.showinfo('Server gestoppt','Bitte zuerst den Server starten.');return
-        webbrowser.open(f"http://127.0.0.1:{self.config['port']}")
+        profile = self.config['monitors'][min(self.monitor_selection.current(), len(self.servers)-1)]
+        webbrowser.open(f"http://127.0.0.1:{profile['port']}")
+
+    def open_editor(self):
+        if self.editor_server is None:
+            messagebox.showinfo('Redaktion', 'Bitte die Redaktion aktivieren und den Server starten.')
+            return
+        webbrowser.open(f"http://127.0.0.1:{self.config['editor_port']}")
 
     def check_updates(self):
         """Prüft Releases im Hintergrund, ohne Dateien zu verändern."""

@@ -3,3 +3,6 @@ requests>=2.32,<3
 waitress>=3.0,<4
 keyring>=25,<27
 PyMuPDF>=1.24,<2
+bleach>=6.2,<7
+tinycss2>=1.4,<2
+Pillow>=11,<13
