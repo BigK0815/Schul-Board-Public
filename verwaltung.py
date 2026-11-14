@@ -1,4 +1,4 @@
-"""Lokale Windows-Verwaltung des Stundenplan-Boards."""
+"""Lokale Windows-Verwaltung des Schul-Monitors."""
 import json
 import os
 import re
@@ -17,8 +17,10 @@ from redaktion import editor_app
 from monitorprofile import FIELDS, default_profile, load_profiles, validate_profiles
 from verwaltungsstil import SettingsViewport, apply_style, card, toggle, flow_buttons
 
+# Historischer Datenordner: aus Kompatibilitätsgründen nicht umbenennen.
 ROOT = Path(os.environ.get('APPDATA', str(Path.home()))) / 'StundenplanBoard'
 CONFIG = ROOT / 'einstellungen.json'
+# Historischer Schlüsselbund-Dienst: vorhandene API-Zugangsdaten beibehalten.
 SERVICE = 'StundenplanBoard-beste.schule'
 ACCOUNT = 'api-token'
 EDITOR_ACCOUNT = 'redaktionspasswort'
