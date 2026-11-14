@@ -5,17 +5,38 @@ from pathlib import Path
 import hashlib
 import fitz
 from threading import Lock
-from time import monotonic
 
-import requests
+from schuldaten import SchoolData
+
 from flask import Flask, jsonify, render_template_string, Response, abort, send_file
 
-BASE = 'https://beste.schule/api'
-SETTINGS = {'refresh_seconds':300,'switch_seconds':15,'course_seconds':4,'cutoff_hour':15,'start_grade':5,'display_rows':2,'pdf_folder':'','pdf_seconds':12,'group_mappings':{},'group_name_display':{},'lesson_times':{},'teacher_mappings':{},'room_mappings':{},'school_name':'Musterschule','school_logo':'','automatic_group_mapping':False}
+SETTINGS = {'switch_seconds':15,'course_seconds':4,'cutoff_hour':15,'start_grade':5,'display_rows':2,'pdf_folder':'','pdf_seconds':12,'group_mappings':{},'group_name_display':None,'group_custom_names':{},'hidden_groups':[],'hidden_grades':[],'lesson_times':{},'school_name':'Musterschule','school_logo':'','automatic_group_mapping':False}
 
 app = Flask(__name__)
-cache = {'at': 0, 'data': None}
+cache = {'key': None, 'data': None}
 lock = Lock()
+school_data = None
+
+
+def source_for(token=None):
+    global school_data
+    token = token or os.environ.get('BESTE_TOKEN', '').strip()
+    if not token:
+        raise RuntimeError('Bitte zuerst einen API-Token eingeben.')
+    if school_data is None or school_data.token != token:
+        if school_data is not None:
+            school_data.session.close()
+        school_data = SchoolData(token)
+        cache.update(key=None, data=None)
+    return school_data
+
+
+def update_groups(token):
+    with lock:
+        updated, mapping = source_for(token).group_snapshot(datetime.now(), force=True)
+        cache.update(key=None, data=None)
+        return updated, mapping
+
 
 HTML = '''<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>__SCHOOL_NAME__ · Stundenplan</title>
 <style>
@@ -102,9 +123,9 @@ main{height:calc(100dvh - clamp(54px,8.4vh,90px));display:grid;grid-template-col
 <main><div id="left"><div id="dayhead"><div class="date-head" id="todayTitle">Heute</div><div class="date-head" id="tomorrowTitle">Morgen</div></div><div id="board"></div></div><aside id="infoboard"><div id="infohead">Infos &amp; Termine</div><div id="infocontent"><div id="infonote"></div><img id="infoimage" alt="Informationen aus PDF"><div id="infoempty">Keine PDF-Dateien im Info-Ordner</div></div></aside></main><div id="copyright">(c) 2026 Robert Kettmann</div>
 <script>
 const BOARD_SETTINGS=__BOARD_SETTINGS_JSON__;
-let data=null,index=__START_INDEX__,lastChange=Date.now(),coursePhase=0,notePhase=0;
-const levels=[5,6,7,8,9,10];
-function gradeOf(name){const m=String(name).match(/^(10|[1-9])(?=\\D|$)/);return m?Number(m[1]):null;}
+let data=null,index=0,lastChange=Date.now(),coursePhase=0,notePhase=0;
+let levels=[];
+function gradeOf(name){return data.class_grades[name] ?? 0;}
 const weekdays=['Sonntag','Montag','Dienstag','Mittwoch','Donnerstag','Freitag','Samstag'];
 function dateLabel(iso){let d=new Date(iso+'T12:00:00');return weekdays[d.getDay()]+', '+iso.slice(8,10)+'.'+iso.slice(5,7)+'.';}
 function dayHeading(iso, now){
@@ -197,14 +218,22 @@ function render(){if(!data)return;
  const periodCount=Math.max(8,...Object.keys(BOARD_SETTINGS.lesson_times).map(Number),
   ...Object.values(data.classes).map(lessons=>lessons.reduce((last,l)=>Math.max(last,l.nr),0)));
  board.style.setProperty('--period-count',periodCount);
- const selected=Array.from({length:rows},(_,i)=>levels[(index+i)%levels.length]);
+ if(!levels.length){board.innerHTML='';return;}
+ const selected=Array.from({length:Math.min(rows,levels.length)},(_,i)=>levels[(index+i)%levels.length]);
  board.innerHTML=selected.map(level=>{const names=Object.keys(data.classes).filter(k=>gradeOf(k)===level).sort((a,b)=>a.localeCompare(b,'de',{numeric:true}));
  return `<section class="level">${renderDay(names,0,periodCount)}${renderDay(names,1,periodCount)}</section>`;}).join('');
  markCurrentPeriod(now);
  requestAnimationFrame(fitCells);
 }
-function next(){const rows=Math.max(1,Math.min(3,Number(BOARD_SETTINGS.display_rows)||2));index=(index+rows)%levels.length;lastChange=Date.now();render()}
-async function load(){try{const r=await fetch('/api/week',{cache:'no-store'});const j=await r.json();if(!r.ok)throw Error(j.error||'HTTP '+r.status);data=j;render();}catch(e){document.getElementById('board').innerHTML='<div class="error">'+escapeHtml(e.message)+'</div>';}}
+function next(){if(!levels.length)return;const rows=Math.max(1,Math.min(3,Number(BOARD_SETTINGS.display_rows)||2));index=(index+rows)%levels.length;lastChange=Date.now();render()}
+async function load(){try{const r=await fetch('/api/week',{cache:'no-store'});const j=await r.json();if(!r.ok)throw Error(j.error||'HTTP '+r.status);const newLevels=[...new Set(Object.values(j.class_grades).map(grade=>grade??0))].sort((a,b)=>a-b);
+if(newLevels.join(',')!==levels.join(',')){
+ const start=newLevels.findIndex(grade=>grade>=BOARD_SETTINGS.start_grade);
+ const rows=BOARD_SETTINGS.display_rows;
+ index=Math.floor(Math.max(0,start)/rows)*rows;
+ levels=newLevels;
+}
+data=j;render();}catch(e){document.getElementById('board').innerHTML='<div class="error">'+escapeHtml(e.message)+'</div>';}}
 function currentPeriod(times, time){
  const periods=Object.keys(times);
  if(!periods.length || time<times[periods[0]].start)return 0;
@@ -247,16 +276,8 @@ setInterval(refreshInfo,5000);refreshInfo();
 setInterval(()=>{const sec=BOARD_SETTINGS.switch_seconds;if(sec&&Date.now()-lastChange>=sec*1000)next()},1000);
 setInterval(()=>{coursePhase++;if(data)render()},Math.max(1,BOARD_SETTINGS.course_seconds)*1000);
 
-setInterval(load,Math.max(30,BOARD_SETTINGS.refresh_seconds)*1000);setInterval(updateClock,1000);updateClock();load();
+setInterval(load,15000);setInterval(updateClock,1000);updateClock();load();
 </script></body></html>'''
-
-def api_get(session, path, params=None):
-    r = session.get(BASE + path, params=params, timeout=30)
-    r.raise_for_status()
-    return r.json()
-
-def unwrap(payload):
-    return payload.get('data', payload) if isinstance(payload, dict) else payload
 
 def ident(obj):
     return str((obj or {}).get('local_id') or (obj or {}).get('name') or '') if isinstance(obj, dict) else ''
@@ -264,18 +285,15 @@ def ident(obj):
 def details(item):
     return {'weekday': int(item.get('weekday') or 0), 'nr': int(item.get('nr') or 0), 'subject': ident(item.get('subject')), 'teacher': ', '.join(filter(None, [ident(x) for x in (item.get('teachers') or [])])), 'room': ', '.join(filter(None, [ident(x) for x in (item.get('rooms') or [])])), 'status': item.get('status', 'initial'), 'changed': False, 'note': ''}
 
-def default_group_name_display(group):
-    return group.upper().startswith('NGS')
+def group_display_name(group, settings):
+    names = settings['group_custom_names']
+    if group in names:
+        return names[group].strip()
+    legacy = settings.get('group_name_display')
+    if legacy is not None and legacy.get(group, group.upper().startswith('NGS')):
+        return group
+    return ''
 
-
-def display_names(lesson):
-    """Translate only visible teacher/room labels, after original/replacement resolution."""
-    for field, setting in (('teacher', 'teacher_mappings'), ('room', 'room_mappings')):
-        mapping = SETTINGS.get(setting) or {}
-        value = lesson.get(field, '')
-        if value:
-            lesson[field] = ', '.join(mapping.get(part.strip(), part.strip()) for part in value.split(',') if part.strip())
-    return lesson
 
 def split_labels(value):
     return [v.strip() for v in (value or '').split(',') if v.strip()]
@@ -382,7 +400,7 @@ def resolve_moved_room(lesson, group, destination, regular_by_date):
     return lesson
 
 
-def visible_days(now=None):
+def visible_days(now=None, timetable=None):
     """Two school days, advancing at configured cutoff."""
     now = now or datetime.now()  # local clock of the school computer
     cursor = now.date()
@@ -392,16 +410,21 @@ def visible_days(now=None):
     ])
     if now.time() >= cutoff and cursor.weekday() < 5:
         cursor += timedelta(days=1)
+    # The API may encode its list of calendar dates as a string.
+    closed = set(re.findall(r'\b\d{4}-\d{2}-\d{2}\b',
+                            str((timetable or {}).get('no_school_dates') or '')))
     result = []
     while len(result) < 2:
-        if cursor.weekday() < 5:
+        if cursor.weekday() < 5 and cursor.isoformat() not in closed:
             result.append(cursor)
         cursor += timedelta(days=1)
     return result
 
 
-def target_classes(group, class_names):
-    """Manual exact assignments take precedence; existing school rules remain fallback."""
+def target_classes(group, class_names, automatic_mapping=None):
+    """Use API membership when available, with manual assignments as a fallback."""
+    if automatic_mapping is not None:
+        return automatic_mapping.get(group, ())
     mapping = SETTINGS.get('group_mappings') or {}
     if group in mapping and mapping[group]:
         targets = mapping[group]
@@ -444,32 +467,37 @@ def target_classes(group, class_names):
     return same_year
 
 
-def build_week(days):
-    token = os.environ.get('BESTE_TOKEN', '').strip()
-    if not token:
-        raise RuntimeError('BESTE_TOKEN fehlt. Bitte im gleichen PowerShell-Fenster setzen.')
-    session = requests.Session()
-    session.headers.update({'Authorization': 'Bearer ' + token, 'Accept': 'application/json'})
-    timetable = unwrap(api_get(session, '/time-tables/current'))
-    if not isinstance(timetable, dict):
-        raise RuntimeError('Unbekanntes Format des Stundenplans')
-    # Explicit main classes are stored as self-mappings; course mappings also
-    # establish their class targets. No school-specific class naming is required.
-    mapping = SETTINGS.get('group_mappings') or {}
+def class_grade(name, grades=None):
+    if grades and name in grades:
+        return grades[name]
+    match = re.match(r'^(?:Jg\.?\s*)?(1[0-3]|[1-9])(?=\D|$)', name, re.IGNORECASE)
+    return int(match[1]) if match else None
+
+
+def build_week(days, timetable, substitutions, automatic_mapping, grades=None):
+    mapping = automatic_mapping
+    if mapping is None:
+        mapping = SETTINGS.get('group_mappings') or {}
     configured = set()
     for targets in mapping.values():
         if isinstance(targets, str):
             targets = [v.strip() for v in re.split('[,;]', targets) if v.strip()]
         configured.update(str(v).strip() for v in targets if str(v).strip())
     classes = {name: {} for name in configured}
-    if SETTINGS.get('automatic_group_mapping', True):
-        # Backwards compatibility: retain previously discovered home classes.
-        groups = unwrap(api_get(session, '/groups'))
-        if isinstance(groups, list):
-            for group in groups:
-                name = ident(group)
-                if re.fullmatch(r'(?:10|[5-9])/\d+', name):
-                    classes.setdefault(name, {})
+    if automatic_mapping is None and not classes:
+        for item in timetable['lessons']:
+            name = ident(item.get('group'))
+            if re.fullmatch(r'(?:10|[5-9])/\d+', name):
+                classes.setdefault(name, {})
+
+    hidden = set(SETTINGS['hidden_groups'])
+    excluded_grades = set(SETTINGS['hidden_grades'])
+    classes = {name: slots for name, slots in classes.items()
+               if name not in hidden and class_grade(name, grades) not in excluded_grades}
+    if automatic_mapping is not None:
+        automatic_mapping = {group: [name for name in targets if name in classes]
+                             for group, targets in automatic_mapping.items() if group not in hidden}
+
     # The published timetable explicitly maps ISO calendar weeks to A/B types.
     # Never infer the week type from the parity of the week number: holidays
     # and timetable changes can break that assumption.
@@ -497,7 +525,7 @@ def build_week(days):
     regular_by_date = {d.isoformat(): {} for d in reference_days}
     for item in timetable.get('lessons', []):
         group = ident(item.get('group'))
-        if not target_classes(group, classes):
+        if group in hidden or not target_classes(group, classes, automatic_mapping):
             continue
         lesson = details(item)
         if 1 <= lesson['weekday'] <= 5 and 1 <= lesson['nr'] <= 10:
@@ -514,96 +542,88 @@ def build_week(days):
     # These must never be refilled from the regular timetable.
     published_slots = {}
     day_notes = {d.isoformat(): [] for d in days}
-    first = api_get(session, '/substitution-plans/days', {'page': 1})
-    meta = first.get('meta', {}) if isinstance(first, dict) else {}
-    last = int(meta.get('last_page') or 1)
-    if last > 100:
-        raise RuntimeError('Mehr als 100 Vertretungsplanseiten: Abruf nicht vollständig.')
-    wanted = {d.isoformat() for d in days}
-    for page_number in range(1, last + 1):
-        page = first if page_number == 1 else api_get(session, '/substitution-plans/days', {'page': page_number})
-        for day in unwrap(page) or []:
-            day_iso = str(day.get('date') or '')[:10]
-            if day_iso not in wanted:
+    for day in substitutions:
+        day_iso = str(day['date'])[:10]
+        published.add(day_iso)
+        # Day-level notes belong to the date, not individual lessons.
+        # Preserve their API order; ignore empty strings and duplicates.
+        notes = day.get('notes') or []
+        for note in ([notes] if isinstance(notes, str) else notes):
+            if isinstance(note, str) and note.strip() and note.strip() not in day_notes[day_iso]:
+                day_notes[day_iso].append(note.strip())
+        weekday = date.fromisoformat(day_iso).isoweekday()
+        entries = daily_by_date.setdefault(day_iso, [])
+        # A moved lesson is published twice: a new planned slot and a
+        # canceled slot at its old time. The canceled half is irrelevant
+        # on the pupil-facing board. Match within the same original group
+        # and subject, on different periods; ordinary cancellations stay.
+        raw_lessons = [item for item in day.get('lessons') or []
+                       if (group := ident(item.get('group'))) not in hidden
+                       and target_classes(group, classes, automatic_mapping)]
+        mentioned = published_slots.setdefault(day_iso, set())
+        for raw in raw_lessons:
+            raw_group = ident(raw.get('group'))
+            try:
+                raw_nr = int(raw.get('nr') or 0)
+            except (ValueError, TypeError):
                 continue
-            published.add(day_iso)
-            # Day-level notes belong to the date, not individual lessons.
-            # Preserve their API order; ignore empty strings and duplicates.
-            for note in day.get('notes') or []:
-                if isinstance(note, str) and note.strip() and note.strip() not in day_notes[day_iso]:
-                    day_notes[day_iso].append(note.strip())
-            weekday = date.fromisoformat(day_iso).isoweekday()
-            entries = daily_by_date.setdefault(day_iso, [])
-            # A moved lesson is published twice: a new planned slot and a
-            # canceled slot at its old time. The canceled half is irrelevant
-            # on the pupil-facing board. Match within the same original group
-            # and subject, on different periods; ordinary cancellations stay.
-            raw_lessons = day.get('lessons', []) or []
-            mentioned = published_slots.setdefault(day_iso, set())
-            for raw in raw_lessons:
-                raw_group = ident(raw.get('group'))
-                try:
-                    raw_nr = int(raw.get('nr') or 0)
-                except (ValueError, TypeError):
-                    continue
-                if raw_group and 1 <= raw_nr <= 10:
-                    mentioned.add((raw_group, weekday, raw_nr))
-            moved_from = set()
-            planned_by_course = {}
-            for raw in raw_lessons:
-                if raw.get('status') == 'planned':
-                    key = (ident(raw.get('group')), ident(raw.get('subject')))
-                    planned_by_course.setdefault(key, set()).add(raw.get('nr'))
-            for idx, raw in enumerate(raw_lessons):
-                if raw.get('status') != 'canceled':
-                    continue
+            if raw_group and 1 <= raw_nr <= 10:
+                mentioned.add((raw_group, weekday, raw_nr))
+        moved_from = set()
+        planned_by_course = {}
+        for raw in raw_lessons:
+            if raw.get('status') == 'planned':
                 key = (ident(raw.get('group')), ident(raw.get('subject')))
-                if any(nr != raw.get('nr') for nr in planned_by_course.get(key, ())):
-                    moved_from.add(idx)
-            canceled_by_course = {}
-            for idx in moved_from:
-                old_raw = raw_lessons[idx]
-                key = (ident(old_raw.get('group')), ident(old_raw.get('subject')))
-                canceled_by_course.setdefault(key, []).append(details(old_raw))
-            for idx, item in enumerate(raw_lessons):
-                if idx in moved_from:
-                    continue
-                group = ident(item.get('group'))
-                if not target_classes(group, classes):
-                    continue
-                lesson = details(item)
-                lesson['weekday'] = weekday
-                if not 1 <= lesson['nr'] <= 10:
-                    continue
-                originals = regular_by_date[day_iso].get((group, weekday, lesson['nr']), [])
-                if lesson['status'] == 'canceled' and originals:
-                    # Ausfall zeigt den ursprünglichen Stundenplaneintrag, nicht
-                    # die leeren/abweichenden Werte der Vertretungsmeldung.
-                    original = next((old for old in originals
-                                     if old['subject'] == lesson['subject']), originals[0])
-                    for field in ('subject', 'teacher', 'room'):
-                        lesson[field] = original[field]
-                else:
-                    course_key = (group, lesson['subject'])
-                    moved_candidates = [old for old in canceled_by_course.get(course_key, [])
-                                        if old['nr'] != lesson['nr']]
-                    # Only infer a move when there is a unique canceled source.
-                    moved_originals = moved_candidates if (lesson['status'] == 'planned'
-                                                          and len(moved_candidates) == 1) else None
-                    # Resolve teacher replacement against the original slot,
-                    # independently of the subject and of teacher ordering.
-                    lesson = resolve_replacement_teacher(lesson, originals)
-                    # Resolve rooms from the original (unmodified) timetable.
-                    lesson = resolve_moved_room(lesson, group, day_iso, regular_by_date)
-                    # A same-day canceled source is an additional safe fallback.
-                    lesson = resolve_current_assignment(lesson, originals, moved_originals)
-                exact = any(all(lesson[k] == old[k] for k in ('subject', 'teacher', 'room')) for old in originals)
-                lesson['changed'] = lesson['status'] == 'planned' or (bool(originals) and not exact and lesson['status'] != 'canceled')
-                if originals and lesson['changed']:
-                    lesson['note'] = ''  # Keine ehemalige Lehrkraft im Schüler-Board
-                entries.append((group, lesson))
+                planned_by_course.setdefault(key, set()).add(raw.get('nr'))
+        for idx, raw in enumerate(raw_lessons):
+            if raw.get('status') != 'canceled':
+                continue
+            key = (ident(raw.get('group')), ident(raw.get('subject')))
+            if any(nr != raw.get('nr') for nr in planned_by_course.get(key, ())):
+                moved_from.add(idx)
+        canceled_by_course = {}
+        for idx in moved_from:
+            old_raw = raw_lessons[idx]
+            key = (ident(old_raw.get('group')), ident(old_raw.get('subject')))
+            canceled_by_course.setdefault(key, []).append(details(old_raw))
+        for idx, item in enumerate(raw_lessons):
+            if idx in moved_from:
+                continue
+            group = ident(item.get('group'))
+            if group in hidden or not target_classes(group, classes, automatic_mapping):
+                continue
+            lesson = details(item)
+            lesson['weekday'] = weekday
+            if not 1 <= lesson['nr'] <= 10:
+                continue
+            originals = regular_by_date[day_iso].get((group, weekday, lesson['nr']), [])
+            if lesson['status'] == 'canceled' and originals:
+                # Ausfall zeigt den ursprünglichen Stundenplaneintrag, nicht
+                # die leeren/abweichenden Werte der Vertretungsmeldung.
+                original = next((old for old in originals
+                                 if old['subject'] == lesson['subject']), originals[0])
+                for field in ('subject', 'teacher', 'room'):
+                    lesson[field] = original[field]
+            else:
+                course_key = (group, lesson['subject'])
+                moved_candidates = [old for old in canceled_by_course.get(course_key, [])
+                                    if old['nr'] != lesson['nr']]
+                # Only infer a move when there is a unique canceled source.
+                moved_originals = moved_candidates if (lesson['status'] == 'planned'
+                                                      and len(moved_candidates) == 1) else None
+                # Resolve teacher replacement against the original slot,
+                # independently of the subject and of teacher ordering.
+                lesson = resolve_replacement_teacher(lesson, originals)
+                # Resolve rooms from the original (unmodified) timetable.
+                lesson = resolve_moved_room(lesson, group, day_iso, regular_by_date)
+                # A same-day canceled source is an additional safe fallback.
+                lesson = resolve_current_assignment(lesson, originals, moved_originals)
+            exact = any(all(lesson[k] == old[k] for k in ('subject', 'teacher', 'room')) for old in originals)
+            lesson['changed'] = lesson['status'] == 'planned' or (bool(originals) and not exact and lesson['status'] != 'canceled')
+            if originals and lesson['changed']:
+                lesson['note'] = ''  # Keine ehemalige Lehrkraft im Schüler-Board
+            entries.append((group, lesson))
 
-    group_name_display = SETTINGS.get('group_name_display') or {}
     for ddate in days:
         day_iso = ddate.isoformat()
         if day_iso in published:
@@ -620,15 +640,17 @@ def build_week(days):
             source = [(group, dict(lesson)) for (group, weekday, nr), lessons in regular_by_date[day_iso].items()
                       for lesson in lessons]
         for group, lesson in source:
-            for name in target_classes(group, classes):
-                entry = display_names(dict(lesson, day=day_iso))
-                if group_name_display.get(group, default_group_name_display(group)):
-                    entry['display_label'] = group
+            for name in target_classes(group, classes, automatic_mapping):
+                entry = dict(lesson, day=day_iso)
+                custom_name = group_display_name(group, SETTINGS)
+                if custom_name:
+                    entry['display_label'] = custom_name
                 classes[name].setdefault((day_iso, entry['nr']), []).append(entry)
 
-    return {'days': [d.isoformat() for d in days], 'day_notes': day_notes, 'classes': {
+    return {'days': [d.isoformat() for d in days], 'day_notes': day_notes,
+            'class_grades': {name: class_grade(name, grades) for name in classes}, 'classes': {
         name: [entry for parallel in slots.values() for entry in parallel]
-        for name, slots in sorted(classes.items())}}
+        for name, slots in sorted(classes.items()) if name not in hidden}}
 
 @app.get('/')
 def home():
@@ -637,17 +659,13 @@ def home():
         'lesson_times': SETTINGS['lesson_times'],
         'switch_seconds': int(SETTINGS['switch_seconds']),
         'course_seconds': int(SETTINGS['course_seconds']),
-        'refresh_seconds': int(SETTINGS['refresh_seconds']),
         'display_rows': int(SETTINGS['display_rows']),
+        'start_grade': int(SETTINGS['start_grade']),
         'pdf_seconds': int(SETTINGS['pdf_seconds']),
     }
     from markupsafe import escape
     html = HTML.replace('__BOARD_SETTINGS_JSON__', json.dumps(client_settings))
     html = html.replace('__SCHOOL_NAME__', str(escape(SETTINGS.get('school_name') or 'Musterschule')))
-    rows = max(1, min(3, int(SETTINGS['display_rows'])))
-    start_grade = max(5, min(10, int(SETTINGS['start_grade'])))
-    start_index = ((start_grade - 5) // rows) * rows
-    html = html.replace('__START_INDEX__', str(start_index))
     return render_template_string(html)
 
 @app.get('/assets/schullogo.png')
@@ -658,19 +676,28 @@ def school_logo():
         logo = Path(__file__).with_name('schullogo.png')
     return send_file(logo, mimetype='image/png', max_age=0)
 
+def refresh_board():
+    with lock:
+        source = source_for()
+        now = datetime.now()
+        timetable = source.timetable(now)
+        days = visible_days(now, timetable)
+        updated, mapping = source.group_snapshot(now)
+        substitutions = source.substitution_days(days)
+        key = (now.date(), tuple(days), updated, tuple(stamp for stamp, _ in substitutions))
+        if cache['key'] != key:
+            published = [day for _, day in substitutions if day is not None]
+            cache.update(data=build_week(days, timetable, published, mapping,
+                                         source.read('jahrgaenge-cache')[1]), key=key)
+        return cache['data']
+
+
 @app.get('/api/week')
 def week():
-    with lock:
-        days = visible_days()
-        if cache['data'] is None or cache['data']['days'] != [d.isoformat() for d in days] or monotonic()-cache['at'] > int(SETTINGS['refresh_seconds']):
-            try:
-                cache['data'] = build_week(days)
-                cache['at'] = monotonic()
-            except Exception as e:
-                return jsonify({'error': str(e)}), 502
-        return jsonify(cache['data'])
-
-
+    try:
+        return jsonify(refresh_board())
+    except Exception as error:
+        return jsonify({'error': str(error)}), 502
 
 
 def info_directory():

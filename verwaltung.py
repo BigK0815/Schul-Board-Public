@@ -2,7 +2,6 @@
 import json
 import os
 import re
-import socket
 import threading
 import tkinter as tk
 import webbrowser
@@ -16,14 +15,14 @@ from waitress import create_server
 import board_engine
 import updater
 from zeitauswahl import choose_time
-from verwaltungsstil import SettingsViewport, apply_style, card, toggle, flow_buttons, wrapping_label
+from verwaltungsstil import SettingsViewport, apply_style, card, toggle, flow_buttons
 
 ROOT = Path(os.environ.get('APPDATA', str(Path.home()))) / 'StundenplanBoard'
 CONFIG = ROOT / 'einstellungen.json'
 SERVICE = 'StundenplanBoard-beste.schule'
 ACCOUNT = 'api-token'
-DEFAULT = {'port':5000,'lan':False,'refresh_seconds':300,'switch_seconds':15,
-           'course_seconds':4,'cutoff_hour':15,'start_grade':5,'display_rows':2,'pdf_folder':'','pdf_seconds':12,'group_mappings':{},'group_name_display':{},'lesson_times':{},'teacher_mappings':{},'room_mappings':{},'school_name':'Musterschule','school_logo':'','automatic_group_mapping':False}
+DEFAULT = {'port':5000,'lan':False,'switch_seconds':15,
+           'course_seconds':4,'cutoff_hour':15,'start_grade':5,'display_rows':2,'pdf_folder':'','pdf_seconds':12,'group_mappings':{},'group_name_display':None,'group_custom_names':{},'hidden_groups':[],'hidden_grades':[],'show_unassigned':True,'lesson_times':{},'school_name':'Musterschule','school_logo':'','automatic_group_mapping':False}
 
 def lesson_end(start, duration):
     if not 1 <= duration < 1440:
@@ -42,6 +41,38 @@ def saved_duration(config):
         start, end = (time.fromisoformat(period[key]) for key in ('start', 'end'))
         return (end.hour - start.hour) * 60 + end.minute - start.minute
     return 45
+
+
+def natural_name_key(name):
+    normalized = name.casefold().translate(str.maketrans('äöü', 'aou'))
+    return [int(part) if part.isascii() and part.isdigit() else part
+            for part in re.split(r'([0-9]+)', normalized)]
+
+
+def visible_row_indices(top, height, row_height, count):
+    first = max(0, top // row_height - 2)
+    end = min(count, (top + height + row_height - 1) // row_height + 2)
+    return range(first, end)
+
+
+def visibility_icons(parent, size):
+    """Transparent checkbox images shared by every visible table row."""
+    images = []
+    for selected in (False, True):
+        icon = tk.PhotoImage(master=parent, width=size, height=size)
+        outline = '#0866cb' if selected else '#657d98'
+        icon.put(outline, to=(2, 0, size - 2, size))
+        icon.put(outline, to=(0, 2, size, size - 2))
+        if selected:
+            # Draw the two strokes in the same proportions at each DPI.
+            for x in range(size * 23 // 100, size * 78 // 100):
+                y = size * 49 // 100 + min(x - size * 23 // 100,
+                                           size * 57 // 100 - x)
+                icon.put('#ffffff', to=(x, y, x + 1, y + max(2, size // 9)))
+        else:
+            icon.put('#ffffff', to=(2, 2, size - 2, size - 2))
+        images.append(icon)
+    return images
 
 
 class Window:
@@ -73,8 +104,7 @@ class Window:
         self.pages = {}
         self.nav_buttons = {}
         self.nav_markers = {}
-        for name in ('Allgemein', 'API & Server', 'Anzeige & PDFs',
-                     'Lehrer', 'Räume', 'Klassen & Gruppen'):
+        for name in ('Allgemein', 'API & Server', 'Anzeige & PDFs', 'Klassen & Gruppen'):
             page = ttk.Frame(self.viewport.content, padding=12)
             self.pages[name] = page
             ttk.Label(page, text=name, style='Page.TLabel').pack(anchor='w', pady=(0, 16))
@@ -129,12 +159,6 @@ class Window:
             side='left', fill='x', expand=True)
         ttk.Button(logo_row, text='Auswählen …', command=self.choose_school_logo).pack(
             side='left', padx=(8, 0))
-        self.automatic_group_mapping = tk.BooleanVar(value=self.config.get('automatic_group_mapping', True))
-        grouping = card(school_tab, 'Automatische Gruppenzuordnung')
-        toggle(grouping, 'Gruppenregeln anwenden', self.automatic_group_mapping).pack(side='right')
-        ttk.Label(grouping, text='Nur aktivieren, wenn die Gruppenkennungen zu den eingebauten Regeln passen.',
-                  style='CardMuted.TLabel', wraplength=310).pack(side='left', fill='x', expand=True)
-
         times_card = card(times_tab, 'Unterrichtszeiten')
         duration_row = ttk.Frame(times_card, style='Card.TFrame')
         duration_row.pack(fill='x', pady=(0, 12))
@@ -190,7 +214,6 @@ class Window:
         options.pack(fill='x')
         entries = [
             ('port','Server-Port',[5000,5050,8080]),
-            ('refresh_seconds','Daten aktualisieren (Sekunden)',[60,120,300,600,900]),
             ('switch_seconds','Jahrgang wechseln (Sekunden)',[0,10,15,20,25,30]),
             ('course_seconds','Kurse durchblättern (Sekunden)',[2,3,4,5,6,8]),
             ('cutoff_hour','Tageswechsel (Uhrzeit)',[12,13,14,15,16,17,18]),
@@ -215,25 +238,86 @@ class Window:
         ttk.Entry(pdfrow, textvariable=self.pdf_folder).pack(side='left', fill='x', expand=True)
         ttk.Button(pdfrow, text='Auswählen …', command=self.choose_pdf_folder).pack(side='left', padx=5)
 
-        for name, kind, desc in [
-            ('Lehrer','teachers','Lehrerbezeichnungen und Anzeigenamen verwalten'),
-            ('Räume','rooms','Raumbezeichnungen und Anzeigenamen verwalten'),
-            ('Klassen & Gruppen','groups','Hauptklassen und bis zu 16 Gruppen zuordnen')]:
-            page = card(self.pages[name], 'Zuordnungen')
-            ttk.Label(page, text=desc, style='Card.TLabel').pack(anchor='w', pady=(0, 12))
-            ttk.Button(page, text='Tabelle bearbeiten / Excel einfügen …',
-                       command=lambda k=kind: self.open_mapping_editor(k)).pack(anchor='w')
-            ttk.Label(page, text='Der Tabelleneditor öffnet sich in einem eigenen Fenster.',
-                      style='CardMuted.TLabel').pack(anchor='w', pady=(8, 0))
+        groups_page = self.pages['Klassen & Gruppen']
+        group_refresh = card(groups_page, 'Gruppenzuordnung')
+        self.group_refresh_button = ttk.Button(
+            group_refresh, text='Jetzt aktualisieren', command=self.update_groups)
+        self.group_refresh_button.pack(side='right', padx=(8, 0))
+        ttk.Label(group_refresh, text='Automatische Aktualisierung einmal pro Woche',
+                  style='Card.TLabel').pack(anchor='w')
+        self.group_status = tk.StringVar(value='Noch nicht aktualisiert')
+        ttk.Label(group_refresh, textvariable=self.group_status,
+                  style='CardMuted.TLabel').pack(anchor='w', pady=(4, 0))
 
-        group_display = card(self.pages['Klassen & Gruppen'], 'Anzeige im Plan')
-        ttk.Label(group_display, text='Mit Häkchen erscheint der Gruppenname, ohne Häkchen das Fachkürzel.',
-                  style='CardMuted.TLabel', wraplength=420).pack(anchor='w', pady=(0, 10))
-        self.group_name_options = {}
-        self.group_name_list = ttk.Frame(group_display, style='Card.TFrame')
-        self.group_name_list.pack(fill='x')
-        self.group_name_list.bind('<Configure>', self.layout_group_name_options)
-        self.group_name_columns = 0
+        self.group_visibility = {}
+        self.group_custom_names = {}
+        filters = card(groups_page, 'Jahrgänge anzeigen')
+        self.grade_filters = {}
+        self.grade_buttons = ttk.Frame(filters, style='Card.TFrame')
+        self.grade_buttons.pack(fill='x')
+        self.show_unassigned = tk.BooleanVar(value=self.config['show_unassigned'])
+        ttk.Checkbutton(filters, text='Gruppen ohne Zuordnung anzeigen',
+                        variable=self.show_unassigned, command=self.refresh_group_name_options,
+                        style='GroupName.TCheckbutton').pack(anchor='w', pady=(6, 0))
+        self.class_grades = {}
+
+        table = card(groups_page, 'Anzeige im Plan')
+        table.columnconfigure(0, weight=1)
+        grid = ttk.Frame(table)
+        grid.pack(fill='x')
+        grid.columnconfigure(0, weight=1)
+        line = '#b8cce3'
+        self.group_header_canvas = tk.Canvas(grid, height=1, highlightthickness=0, background=line)
+        self.group_canvas = tk.Canvas(grid, height=250, highlightthickness=0, background=line)
+        self.group_header_canvas.grid(row=0, column=0, sticky='ew')
+        self.group_canvas.grid(row=1, column=0, sticky='ew')
+        self.group_header = tk.Frame(self.group_header_canvas, background=line)
+        self.group_rows = []
+        self.group_row_widgets = {}
+        self.group_render_pending = False
+        self.group_table_width = 0
+        line_height = font.nametofont('TkDefaultFont').metrics('linespace')
+        checkbox_size = max(22, line_height + 4)
+        self.group_row_height = max(line_height + 18, checkbox_size + 10)
+        self.group_visibility_icons = visibility_icons(self.group_canvas, checkbox_size)
+        self.group_header_window = self.group_header_canvas.create_window(
+            0, 0, anchor='nw', window=self.group_header)
+        scroll = ttk.Scrollbar(grid, orient='vertical', command=self.group_canvas.yview)
+        scroll.grid(row=1, column=1, sticky='ns')
+
+        def scroll_rows(first, last):
+            scroll.set(first, last)
+            self.schedule_group_rows()
+
+        self.group_canvas.configure(yscrollcommand=scroll_rows,
+                                    yscrollincrement=self.group_row_height)
+
+        def scroll_columns(*args):
+            self.group_canvas.xview(*args)
+            self.group_header_canvas.xview(*args)
+
+        horizontal = ttk.Scrollbar(grid, orient='horizontal', command=scroll_columns)
+        self.group_canvas.configure(xscrollcommand=horizontal.set)
+        horizontal.grid(row=2, column=0, sticky='ew')
+        titles = ('Anzeigen', 'Klasse / Gruppe', 'Hauptklassen', 'Eigener Anzeigename')
+        heading_font = font.nametofont('TkDefaultFont').copy()
+        heading_font.configure(weight='bold')
+        self.group_column_widths = [heading_font.measure(title) + 20 for title in titles]
+        for column, title in enumerate(titles):
+            tk.Label(self.group_header, text=title, font=heading_font, background='#dceafa',
+                     anchor='w', padx=9, pady=7).grid(row=0, column=column, sticky='nsew',
+                                                      padx=(0, 1), pady=(0, 1))
+        for column in (1, 2):
+            self.group_column_widths[column] = max(self.group_column_widths[column], 146)
+        self.group_canvas.bind('<Configure>', self.resize_group_table)
+        self.group_canvas.bind('<Map>', lambda event: self.resize_group_table())
+        self.group_header.bind('<Configure>', self.resize_group_table)
+        self.group_canvas.bind('<MouseWheel>', self.scroll_group_rows)
+        self.root.bind('<Configure>', self.resize_group_table, add='+')
+        self.group_timestamp = None
+        self.group_mapping = None
+        self.group_token = ''
+        self.group_refresh_pending = False
         self.refresh_group_name_options()
 
         bottom = ttk.Frame(shell)
@@ -257,6 +341,7 @@ class Window:
         self.viewport.bind_controls(self.viewport.content)
         self.show_page('Allgemein')
         self.root.protocol('WM_DELETE_WINDOW', self.close)
+        self.poll_group_status()
 
     def show_page(self, name):
         self.viewport.show(self.pages[name])
@@ -266,426 +351,221 @@ class Window:
                 style='Selection.TFrame' if label == name else 'Navigation.TFrame')
 
 
-    def refresh_group_name_options(self):
-        mapping = self.config.get('group_mappings') or {}
-        groups = {group for group, targets in mapping.items()
-                  if any(target.strip() != group for target in
-                         (re.split('[,;]', targets) if isinstance(targets, str) else targets or [])
-                         if target.strip())}
-        for child in self.group_name_list.winfo_children():
-            child.destroy()
-        self.group_name_options = {
-            group: self.group_name_options.get(group) or tk.BooleanVar(
-                value=self.config['group_name_display'].get(
-                    group, board_engine.default_group_name_display(group)))
-            for group in sorted(groups, key=lambda name: [
-                int(part) if part.isascii() and part.isdigit() else part
-                for part in re.split(r'([0-9]+)', name.casefold().translate(str.maketrans('äöü', 'aou')))
-            ])
-        }
-        for group, checked in self.group_name_options.items():
-            option = ttk.Checkbutton(self.group_name_list, text=group, variable=checked,
-                                     style='GroupName.TCheckbutton')
-            self.viewport.bind_controls(option)
-        if not self.group_name_options:
-            ttk.Label(self.group_name_list, text='Noch keine Gruppen in der Zuordnungstabelle.',
-                      style='CardMuted.TLabel').pack(anchor='w')
-        self.group_name_columns = 0
-        self.layout_group_name_options()
+    def poll_group_status(self):
+        if not self.group_refresh_pending:
+            try:
+                token = self.get_token()
+                if token == self.group_token and board_engine.school_data is not None:
+                    source = board_engine.school_data
+                    if source.token == token:
+                        updated, mapping = source.read('gruppen-cache')
+                        self.show_group_snapshot(updated, mapping, source.read('jahrgaenge-cache')[1])
+                        if source.group_error:
+                            self.group_status.set('Letzter Abruf fehlgeschlagen: ' + source.group_error)
+                elif token != self.group_token:
+                    self.group_token = token
+                    source = board_engine.SchoolData(token) if token else None
+                    try:
+                        self.show_group_snapshot(
+                            *(source.read('gruppen-cache') if source else (None, None)),
+                            source.read('jahrgaenge-cache')[1] if source else None)
+                    finally:
+                        if source:
+                            source.session.close()
+            except keyring.errors.KeyringError:
+                pass
+        self.root.after(5000, self.poll_group_status)
 
-    def layout_group_name_options(self, _event=None):
-        if not self.group_name_options:
+    def show_group_snapshot(self, updated, mapping, grades=None):
+        if updated is None:
+            self.group_status.set('Noch nicht aktualisiert')
+        else:
+            self.group_status.set(updated.strftime('Zuletzt aktualisiert: %d.%m.%Y, %H:%M'))
+        grades = grades or {}
+        if (updated, mapping, grades) != (self.group_timestamp, self.group_mapping, self.class_grades):
+            self.class_grades = grades
+            self.group_timestamp, self.group_mapping = updated, mapping
+            self.refresh_group_name_options()
+
+    def update_groups(self):
+        token = self.get_token()
+        if not token:
+            messagebox.showwarning('Token fehlt', 'Bitte zuerst den API-Token eingeben.')
             return
-        options = self.group_name_list.winfo_children()
-        column_width = max(option.winfo_reqwidth() for option in options) + 16
-        columns = min(4, max(1, self.group_name_list.winfo_width() // column_width))
-        if columns == self.group_name_columns:
+        if self.running and token != os.environ.get('BESTE_TOKEN'):
+            messagebox.showwarning('API-Token geändert', 'Bitte den Server mit dem neuen Token neu starten.')
             return
-        for column in range(4):
-            self.group_name_list.columnconfigure(column, weight=int(column < columns))
-        for index, option in enumerate(options):
-            row, column = divmod(index, columns)
-            option.grid(row=row, column=column, sticky='w', pady=3, padx=(0, 8))
-        self.group_name_columns = columns
+        self.group_token = token
+        self.group_refresh_pending = True
+        self.group_status.set('Gruppenzuordnung wird aktualisiert …')
+        self.group_refresh_button.configure(state='disabled')
 
-    def open_mapping_editor(self, kind):
-        """Editable mapping table with tab-separated Excel clipboard import/export."""
-        if kind == "groups":
-            return self.open_class_group_editor()
-        specs = {
-            'rooms': ('Räume', 'room_mappings', 'Raum laut API', 'Anzeige auf Board'),
-            'teachers': ('Lehrer', 'teacher_mappings', 'Lehrer laut API', 'Anzeige auf Board'),
-            'groups': ('Hauptklassen und Gruppen', 'group_mappings', 'API-Gruppe', 'Hauptklasse(n)'),
-        }
-        title, key, left_label, right_label = specs[kind]
-        dialog = tk.Toplevel(self.root)
-        dialog.title('Schul-Board – ' + title)
-        dialog.geometry(f'{min(900, dialog.winfo_screenwidth() - 32)}x{min(710, dialog.winfo_screenheight() - 90)}')
-        dialog.transient(self.root)
-        outer = ttk.Frame(dialog, padding=12)
-        outer.pack(fill='both', expand=True)
-        ttk.Label(outer, text=title, font=('Segoe UI', 13, 'bold')).pack(anchor='w')
-        wrapping_label(outer, text='Excel: zwei Spalten markieren, Strg+C und hier Strg+V. Mehrere Zeilen werden gemeinsam eingefügt. '
-                  'Bei Gruppen: eine Zeile je Zuordnung oder mehrere Klassen durch Komma trennen.').pack(anchor='w', pady=(5, 9))
-        data = dict(self.config.get(key) or {})
-        if kind == 'groups':
-            data = {k: (v if isinstance(v, list) else [v]) for k,v in data.items()}
-        columns = ('source', 'target')
-        table_area = ttk.Frame(outer)
-        tree = ttk.Treeview(table_area, columns=columns, show='headings', selectmode='extended')
-        tree.heading('source', text=left_label)
-        tree.heading('target', text=right_label)
-        tree.column('source', width=350)
-        tree.column('target', width=440)
-        sb = ttk.Scrollbar(table_area, command=tree.yview)
-        tree.configure(yscrollcommand=sb.set)
-        xscroll = ttk.Scrollbar(table_area, orient='horizontal', command=tree.xview)
-        tree.configure(xscrollcommand=xscroll.set)
-        table_area.columnconfigure(0, weight=1)
-        table_area.rowconfigure(0, weight=1)
-        tree.grid(row=0, column=0, sticky='nsew')
-        sb.grid(row=0, column=1, sticky='ns')
-        xscroll.grid(row=1, column=0, sticky='ew')
-        def as_text(value):
-            return ', '.join(value) if isinstance(value,list) else str(value)
-        def redraw():
-            tree.delete(*tree.get_children())
-            for name in sorted(data, key=str.casefold):
-                tree.insert('', 'end', iid=name, values=(name, as_text(data[name])))
-        redraw()
-        row = ttk.Frame(outer)
-
-        row.columnconfigure(1, weight=1)
-        source = tk.StringVar()
-        target = tk.StringVar()
-        ttk.Label(row,text=left_label+':').grid(row=0, column=0, sticky='w')
-        ttk.Entry(row,textvariable=source,width=12).grid(row=0, column=1, sticky='ew', padx=5)
-        ttk.Label(row,text=right_label+':').grid(row=1, column=0, sticky='w')
-        ttk.Entry(row,textvariable=target,width=12).grid(row=1, column=1, sticky='ew', padx=5)
-        def selected(_=None):
-            ids=tree.selection()
-            if len(ids)==1:
-                source.set(ids[0]);target.set(as_text(data[ids[0]]))
-        tree.bind('<<TreeviewSelect>>',selected)
-        import re
-        def parse_classes(value):
-            parts=[x.strip() for x in re.split(r'[,;]',value) if x.strip()]
-            invalid=[x for x in parts if not re.fullmatch(r'(?:10|[5-9])/\d+',x)]
-            if invalid: raise ValueError('Ungültige Hauptklasse: '+', '.join(invalid))
-            return list(dict.fromkeys(parts))
-        def put(name,value,append=False):
-            name=name.strip();value=value.strip()
-            if not name:raise ValueError('Die API-Bezeichnung darf nicht leer sein.')
-            if kind=='groups':
-                classes=parse_classes(value)
-                if append: classes=list(dict.fromkeys(data.get(name,[])+classes))
-                if classes:data[name]=classes
-                else:data.pop(name,None)
+        def finished(updated=None, mapping=None, error=None):
+            self.group_refresh_pending = False
+            self.group_refresh_button.configure(state='normal')
+            if error:
+                self.group_status.set('Aktualisierung fehlgeschlagen')
+                messagebox.showerror('Gruppenzuordnung', error)
             else:
-                if value:data[name]=value
-                else:data.pop(name,None)
-        def apply():
-            try:put(source.get(),target.get());redraw()
-            except ValueError as exc:messagebox.showerror('Eingabe prüfen',str(exc),parent=dialog)
-        ttk.Button(row,text='Übernehmen',command=apply).grid(row=1, column=2)
-        tools=ttk.Frame(outer)
-        def delete():
-            for name in tree.selection():data.pop(name,None)
-            redraw()
-        ttk.Button(tools,text='Ausgewählte entfernen',command=delete)
-        def copy_rows(_=None):
-            ids=tree.selection() or tree.get_children()
-            content='\n'.join(name+'\t'+as_text(data[name]) for name in ids)
-            dialog.clipboard_clear();dialog.clipboard_append(content)
-            return 'break'
-        ttk.Button(tools,text='Auswahl nach Excel kopieren',command=copy_rows)
-        def paste_rows(_=None):
-            try:raw=dialog.clipboard_get()
-            except tk.TclError:return 'break'
-            count=0;errors=[]
-            for lineno,line in enumerate(raw.splitlines(),1):
-                if not line.strip():continue
-                cells=line.split('\t')
-                if len(cells)<2:
-                    errors.append(f'Zeile {lineno}: zwei Excel-Spalten benötigt');continue
-                name=cells[0].strip();value=cells[1].strip()
-                if name.casefold() in ('api-gruppe','raum laut api','lehrer laut api','hauptklasse'):
-                    continue
-                try:put(name,value,append=(kind=='groups'));count+=1
-                except ValueError as exc:errors.append(f'Zeile {lineno}: {exc}')
-            redraw()
-            status.set(f'{count} Zeilen übernommen.' + (' Fehler: '+'; '.join(errors[:4]) if errors else ''))
-            return 'break'
-        ttk.Button(tools,text='Aus Excel einfügen (Strg+V)',command=paste_rows)
-        tree.bind('<Control-v>',paste_rows)
-        tree.bind('<Control-V>',paste_rows)
-        tree.bind('<Control-c>',copy_rows)
-        status=tk.StringVar(value='Noch nicht gespeicherte Änderungen werden erst durch „Speichern“ übernommen.')
-        status_label = wrapping_label(outer,textvariable=status)
-        def fetch():
-            token=self.get_token()
-            if not token:
-                messagebox.showwarning('API-Token fehlt','Bitte zuerst einen API-Token eingeben.',parent=dialog);return
-            status.set('Lade Bezeichnungen aus beste.schule …')
-            def work():
-                try:
-                    headers={'Authorization':'Bearer '+token,'Accept':'application/json'}
-                    if kind=='groups':
-                        response=requests.get('https://beste.schule/api/groups',headers=headers,timeout=40)
-                        response.raise_for_status()
-                        payload=response.json();items=payload.get('data',payload) if isinstance(payload,dict) else payload
-                        names={str(x.get('local_id') or x.get('name') or '').strip() for x in items if isinstance(x,dict)}
-                    else:
-                        response=requests.get('https://beste.schule/api/time-tables/current',headers=headers,timeout=60)
-                        response.raise_for_status()
-                        payload=response.json();table=payload.get('data',payload)
-                        field='rooms' if kind=='rooms' else 'teachers'
-                        names={str(x.get('local_id') or x.get('name') or '').strip()
-                               for lesson in table.get('lessons',[]) for x in (lesson.get(field) or []) if isinstance(x,dict)}
-                    names.discard('')
-                    def show():
-                        for name in names:
-                            if kind=='groups':data.setdefault(name,[])
-                            else:data.setdefault(name,name)
-                        redraw();status.set(f'{len(names)} API-Bezeichnungen geladen; vorhandene Zuordnungen beibehalten.')
-                    dialog.after(0,show)
-                except Exception as exc:
-                    msg=str(exc)
-                    dialog.after(0,lambda:status.set('API-Abruf fehlgeschlagen: '+msg))
-            threading.Thread(target=work,daemon=True).start()
-        ttk.Button(tools,text='Bezeichnungen aus API übernehmen',command=fetch)
-        flow_buttons(tools)
-        def save_mapping():
+                self.show_group_snapshot(updated, mapping, board_engine.school_data.read(
+                    'jahrgaenge-cache')[1])
+
+        def run():
             try:
-                self.config[key]=data
-                CONFIG.parent.mkdir(parents=True,exist_ok=True)
-                CONFIG.write_text(json.dumps(self.config,indent=2,ensure_ascii=False),encoding='utf-8')
-                board_engine.SETTINGS[key]=dict(data)
-                board_engine.cache['at']=0
-                dialog.destroy()
-                self.status.set(title+' gespeichert – Änderungen beim nächsten Datenabruf sichtbar')
-            except Exception as exc:messagebox.showerror('Speichern fehlgeschlagen',str(exc),parent=dialog)
-        save_button = ttk.Button(outer,text='Zuordnungen speichern', style='Accent.TButton', command=save_mapping)
-        save_button.pack(side='bottom', anchor='e',pady=5)
-        status_label.pack(side='bottom', anchor='w',pady=6)
-        tools.pack(side='bottom', fill='x',pady=3)
-        row.pack(side='bottom', fill='x', pady=7)
-        table_area.pack(fill='both', expand=True)
+                updated, mapping = board_engine.update_groups(token)
+            except Exception as error:
+                self.root.after(0, finished, None, None, str(error))
+            else:
+                self.root.after(0, finished, updated, mapping)
 
-    def open_class_group_editor(self):
-        """One main class per row, 16 group columns; Excel TSV and semicolons supported."""
-        import re
-        dialog = tk.Toplevel(self.root)
-        dialog.title('Schul-Board – Hauptklassen und Gruppen')
-        dialog.geometry(f'{min(1250, dialog.winfo_screenwidth() - 32)}x{min(730, dialog.winfo_screenheight() - 90)}')
-        dialog.transient(self.root)
-        frame = ttk.Frame(dialog, padding=12)
-        frame.pack(fill='both', expand=True)
-        ttk.Label(frame, text='Hauptklassen und Gruppen', font=('Segoe UI', 13, 'bold')).pack(anchor='w')
-        wrapping_label(frame, text='Spalte A: Hauptklasse; Spalten B–Q: bis zu 16 Gruppen. Excel-Bereich kopieren und mit Strg+V einfügen. '
-                  'Alternativ mehrere Gruppen mit Semikolon in einer Zelle trennen. Die Hauptklasse gilt automatisch als Gruppe.').pack(anchor='w', pady=(4, 8))
+        threading.Thread(target=run, daemon=True).start()
 
-        # Stored format is API group -> list of main classes. Convert for editing.
-        old = self.config.get('group_mappings') or {}
-        data = {}
-        for group, classes in old.items():
-            if isinstance(classes, str):
-                classes = [x.strip() for x in re.split('[,;]', classes) if x.strip()]
-            for cls in classes:
-                cls = str(cls).strip()
-                if cls and group != cls:
-                    data.setdefault(cls, [])
-                    if group not in data[cls]:
-                        data[cls].append(group)
-        # Also expose classes without extra groups if they were explicitly stored.
-        for group, classes in old.items():
-            if group in classes if isinstance(classes, list) else False:
-                data.setdefault(group, [])
+    def resize_group_table(self, event=None):
+        if event and event.widget not in (self.root, self.group_canvas, self.group_header):
+            return
+        minimum = sum(self.group_column_widths)
+        width = max(minimum, self.group_canvas.winfo_width())
+        widths = self.group_column_widths.copy()
+        extra = width - minimum
+        widths[2] += extra // 2
+        widths[3] += extra - extra // 2
+        for column, size in enumerate(widths):
+            self.group_header.columnconfigure(column, minsize=size)
+        self.group_widths = widths
+        self.group_table_width = width
+        header_height = self.group_header.winfo_reqheight()
+        self.group_header_canvas.configure(height=header_height,
+                                           scrollregion=(0, 0, width, header_height))
+        self.group_header_canvas.itemconfigure(self.group_header_window, width=width)
+        self.group_canvas.configure(
+            height=max(110, self.root.winfo_height() - self.group_canvas.winfo_rooty()
+                       + self.root.winfo_rooty() - 125),
+            scrollregion=(0, 0, width, max(1, len(self.group_rows)) * self.group_row_height))
+        self.group_header_canvas.xview_moveto(self.group_canvas.xview()[0])
+        self.schedule_group_rows()
 
-        cols = ('class',) + tuple(f'g{i}' for i in range(1, 17))
-        table_area = ttk.Frame(frame)
-        tree = ttk.Treeview(table_area, columns=cols, show='headings', selectmode='extended')
-        tree.heading('class', text='Hauptklasse')
-        table_font = font.nametofont('TkDefaultFont', root=dialog)
-        class_width = max(115, table_font.measure('Hauptklasse') + 24)
-        tree.column('class', width=class_width, stretch=False)
-        for i in range(1, 17):
-            col = f'g{i}'
-            tree.heading(col, text=f'Gruppe {i}')
-            tree.column(col, width=max(115, table_font.measure('Gruppe 16') + 24), stretch=False)
-        yscroll = ttk.Scrollbar(table_area, orient='vertical', command=tree.yview)
-        xscroll = ttk.Scrollbar(table_area, orient='horizontal', command=tree.xview)
-        tree.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
-        table_area.columnconfigure(0, weight=1)
-        table_area.rowconfigure(0, weight=1)
-        tree.grid(row=0, column=0, sticky='nsew')
-        yscroll.grid(row=0, column=1, sticky='ns')
-        xscroll.grid(row=1, column=0, sticky='ew')
-        status = tk.StringVar(value='Änderungen werden erst mit „Zuordnungen speichern“ übernommen.')
+    def schedule_group_rows(self):
+        if not self.group_render_pending:
+            self.group_render_pending = True
+            self.group_canvas.after_idle(self.render_group_rows)
 
-        def sort_class(cls):
-            match = re.fullmatch(r'(\d+)/(\d+)', cls)
-            return (int(match.group(1)), int(match.group(2))) if match else (999, cls)
+    def scroll_group_rows(self, event):
+        self.group_canvas.yview_scroll(-int(event.delta / 120), 'units')
+        return 'break'
 
-        def redraw():
-            tree.delete(*tree.get_children())
-            for cls in sorted(data, key=sort_class):
-                groups = data[cls]
-                tree.insert('', 'end', iid=cls, values=[cls] + groups[:16] + [''] * max(0, 16-len(groups)))
+    def refresh_group_name_options(self):
+        mapping = self.group_mapping
+        if mapping is None:
+            mapping = self.config.get('group_mappings') or {}
+        classes = set()
+        groups = {}
+        for group, targets in mapping.items():
+            if isinstance(targets, str):
+                targets = [target.strip() for target in re.split('[,;]', targets) if target.strip()]
+            classes.update(targets)
+            if targets != [group]:
+                groups[group] = targets
+        grades = {name: board_engine.class_grade(name, self.class_grades) for name in classes}
+        available_grades = sorted(set(range(5, 13)) | {grade for grade in grades.values()
+                                                      if grade is not None})
+        if available_grades != list(self.grade_filters):
+            for button in self.grade_buttons.winfo_children():
+                button.destroy()
+            self.grade_filters = {
+                grade: self.grade_filters.get(grade) or tk.BooleanVar(
+                    value=grade not in self.config['hidden_grades']) for grade in available_grades
+            }
+            for index, (grade, checked) in enumerate(self.grade_filters.items()):
+                button = ttk.Checkbutton(
+                    self.grade_buttons, text=str(grade), variable=checked,
+                    command=self.refresh_group_name_options, style='GroupName.TCheckbutton')
+                button.grid(row=index // 8, column=index % 8, sticky='w', padx=(0, 9))
+                self.viewport.bind_controls(button)
+        visible_classes = {name for name, grade in grades.items()
+                           if grade is None or self.grade_filters[grade].get()}
+        rows = [(name, None) for name in sorted(visible_classes, key=natural_name_key)]
+        for name in sorted(groups.keys() - classes, key=natural_name_key):
+            targets = sorted(set(groups[name]) & visible_classes, key=natural_name_key)
+            if targets or (not groups[name] and self.show_unassigned.get()):
+                rows.append((name, targets))
 
-        def parse_groups(cells):
-            result = []
-            for cell in cells:
-                for group in str(cell).split(';'):
-                    group = group.strip()
-                    if group and group not in result:
-                        result.append(group)
-            return result
+        for row in tuple(self.group_row_widgets):
+            self.remove_group_row(row)
+        self.group_rows = rows
+        self.group_canvas.delete('empty')
+        self.group_canvas.yview_moveto(0)
+        self.resize_group_table()
 
-        def put(cls, cells, append=False):
-            cls = cls.strip()
-            if not cls or len(cls) > 60:
-                raise ValueError('Ungültige Hauptklasse: ' + cls)
-            groups = parse_groups(cells)
-            groups = [g for g in groups if g != cls]
-            if append:
-                groups = list(dict.fromkeys(data.get(cls, []) + groups))
-            if len(groups) > 16:
-                raise ValueError(f'{cls}: mehr als 16 Gruppen ({len(groups)})')
-            data[cls] = groups
+    def remove_group_row(self, row):
+        item, frame = self.group_row_widgets.pop(row)
+        self.group_canvas.delete(item)
+        frame.destroy()
 
-        redraw()
-        editor = ttk.Frame(frame)
+    def render_group_rows(self):
+        self.group_render_pending = False
+        canvas = self.group_canvas
+        if not canvas.winfo_ismapped() or not self.group_table_width:
+            return
+        if not self.group_rows:
+            canvas.delete('empty')
+            canvas.create_text(9, 6, anchor='nw', tags='empty',
+                               text='Keine Klassen oder Gruppen für diese Auswahl.')
+            return
+        wanted = set(visible_row_indices(int(canvas.canvasy(0)), canvas.winfo_height(),
+                                         self.group_row_height, len(self.group_rows)))
+        focus = self.root.focus_get()
+        for row, (_, frame) in tuple(self.group_row_widgets.items()):
+            if row not in wanted and (focus is None or not str(focus).startswith(str(frame) + '.')):
+                self.remove_group_row(row)
+        for row in sorted(wanted | self.group_row_widgets.keys()):
+            if row not in self.group_row_widgets:
+                self.create_group_row(row)
+            item, frame = self.group_row_widgets[row]
+            canvas.itemconfigure(item, width=self.group_table_width)
+            for column, width in enumerate(self.group_widths):
+                frame.columnconfigure(column, minsize=width)
 
-        cls_var = tk.StringVar()
-        groups_var = tk.StringVar()
-        editor.columnconfigure(1, weight=1)
-        ttk.Label(editor, text='Hauptklasse:').grid(row=0, column=0, sticky='w')
-        ttk.Entry(editor, textvariable=cls_var, width=10).grid(row=0, column=1, sticky='w', padx=5)
-        ttk.Label(editor, text='Gruppen:').grid(row=1, column=0, sticky='w')
-        ttk.Entry(editor, textvariable=groups_var, width=12).grid(row=1, column=1, sticky='ew', padx=5)
+    def create_group_row(self, row):
+        name, targets = self.group_rows[row]
+        canvas = self.group_canvas
+        frame = tk.Frame(canvas, background='#b8cce3')
+        frame.grid_propagate(False)
+        frame.rowconfigure(0, weight=1)
+        item = canvas.create_window(0, row * self.group_row_height, anchor='nw', window=frame,
+                                    height=self.group_row_height)
+        self.group_row_widgets[row] = (item, frame)
+        if name not in self.group_visibility:
+            self.group_visibility[name] = tk.BooleanVar(value=name not in self.config['hidden_groups'])
+        color = '#ffffff' if row % 2 == 0 else '#edf4fc'
+        cells = [tk.Frame(frame, background=color) for _ in self.group_column_widths]
+        for column, cell in enumerate(cells):
+            cell.pack_propagate(False)
+            cell.grid(row=0, column=column, sticky='nsew', padx=(0, 1), pady=(0, 1))
 
-        def select_row(_=None):
-            selected = tree.selection()
-            if len(selected) == 1:
-                cls = selected[0]
-                cls_var.set(cls)
-                groups_var.set('; '.join(data[cls]))
-        tree.bind('<<TreeviewSelect>>', select_row)
-
-        def apply():
-            try:
-                put(cls_var.get(), [groups_var.get()])
-                redraw()
-                status.set('Zeile übernommen. Zum dauerhaften Speichern unten klicken.')
-            except ValueError as exc:
-                messagebox.showerror('Eingabe prüfen', str(exc), parent=dialog)
-        ttk.Button(editor, text='Zeile übernehmen', command=apply).grid(row=1, column=2, sticky='e')
-
-        buttons = ttk.Frame(frame)
-
-
-        def paste(_=None):
-            try:
-                raw = dialog.clipboard_get()
-            except tk.TclError:
-                return 'break'
-            errors = []
-            count = 0
-            for n, line in enumerate(raw.splitlines(), 1):
-                if not line.strip():
-                    continue
-                cells = line.split('\t')
-                if len(cells) < 2:
-                    errors.append(f'Zeile {n}: mindestens zwei Spalten benötigt')
-                    continue
-                if cells[0].strip().casefold() in ('hauptklasse', 'klasse'):
-                    continue
-                try:
-                    put(cells[0], cells[1:], append=True)
-                    count += 1
-                except ValueError as exc:
-                    errors.append(f'Zeile {n}: {exc}')
-            redraw()
-            status.set(f'{count} Klassenzeilen eingefügt.' + (' Fehler: ' + '; '.join(errors[:4]) if errors else ''))
-            return 'break'
-
-        def copy(_=None):
-            ids = tree.selection() or tree.get_children()
-            content = '\n'.join('\t'.join([cls] + data[cls] + [''] * (16-len(data[cls]))) for cls in ids)
-            dialog.clipboard_clear()
-            dialog.clipboard_append(content)
-            return 'break'
-
-        def remove():
-            for cls in tree.selection():
-                data.pop(cls, None)
-            redraw()
-
-        ttk.Button(buttons, text='Aus Excel einfügen (Strg+V)', command=paste)
-        ttk.Button(buttons, text='Nach Excel kopieren (Strg+C)', command=copy)
-        ttk.Button(buttons, text='Ausgewählte Klassen entfernen', command=remove)
-        tree.bind('<Control-v>', paste)
-        tree.bind('<Control-V>', paste)
-        tree.bind('<Control-c>', copy)
-        tree.bind('<Control-C>', copy)
-
-        def fetch():
-            token = self.get_token()
-            if not token:
-                messagebox.showwarning('API-Token fehlt', 'Bitte zuerst einen API-Token eingeben.', parent=dialog)
-                return
-            status.set('Lade Hauptklassen aus dem Stundenplan …')
-            def work():
-                try:
-                    headers = {'Authorization': 'Bearer ' + token, 'Accept': 'application/json'}
-                    response = requests.get('https://beste.schule/api/time-tables/current', headers=headers, timeout=60)
-                    response.raise_for_status()
-                    payload = response.json()
-                    table = payload.get('data', payload)
-                    names = {str((lesson.get('group') or {}).get('local_id') or '').strip()
-                             for lesson in table.get('lessons', [])}
-                    classes = {x for x in names if re.fullmatch(r'(?:10|[5-9])/\d+', x)}
-                    if not classes:
-                        classes = {x for x in names if re.fullmatch(r'(?:10|[5-9])[a-zA-Z]', x)}
-                    def show():
-                        for cls in classes:
-                            data.setdefault(cls, [])
-                        redraw()
-                        status.set(f'{len(classes)} Hauptklassen erkannt. Gruppen bitte zuordnen.')
-                    dialog.after(0, show)
-                except Exception as exc:
-                    msg = str(exc)
-                    dialog.after(0, lambda: status.set('API-Abruf fehlgeschlagen: ' + msg))
-            threading.Thread(target=work, daemon=True).start()
-        ttk.Button(buttons, text='Hauptklassen aus API übernehmen', command=fetch)
-        flow_buttons(buttons)
-        status_label = wrapping_label(frame, textvariable=status)
-
-        def save():
-            # Keep the engine's established group -> classes representation.
-            mapping = {}
-            for cls, groups in data.items():
-                mapping.setdefault(cls, []).append(cls)
-                for group in groups:
-                    mapping.setdefault(group, []).append(cls)
-            try:
-                self.config['group_mappings'] = mapping
-                CONFIG.parent.mkdir(parents=True, exist_ok=True)
-                CONFIG.write_text(json.dumps(self.config, indent=2, ensure_ascii=False), encoding='utf-8')
-                board_engine.SETTINGS['group_mappings'] = mapping
-                board_engine.cache['at'] = 0
-                self.refresh_group_name_options()
-                self.status.set('Klassen- und Gruppenzuordnungen gespeichert')
-                dialog.destroy()
-            except Exception as exc:
-                messagebox.showerror('Speichern fehlgeschlagen', str(exc), parent=dialog)
-        save_button = ttk.Button(frame, text='Zuordnungen speichern', style='Accent.TButton', command=save)
-        save_button.pack(side='bottom', anchor='e', pady=5)
-        status_label.pack(side='bottom', anchor='w', pady=5)
-        buttons.pack(side='bottom', fill='x', pady=5)
-        editor.pack(side='bottom', fill='x', pady=(9, 4))
-        table_area.pack(fill='both', expand=True)
+        unchecked, checked = self.group_visibility_icons
+        tk.Checkbutton(
+            cells[0], variable=self.group_visibility[name], image=unchecked, selectimage=checked,
+            indicatoron=False, background=color, activebackground=color, selectcolor=color,
+            relief='flat', overrelief='flat', offrelief='flat', borderwidth=0, padx=0, pady=0,
+            highlightthickness=1, highlightbackground=color, highlightcolor='#0866cb',
+            takefocus=True, cursor='hand2',
+        ).pack(fill='both', expand=True)
+        tk.Label(cells[1], text=name, background=color, anchor='w').pack(fill='x', expand=True, padx=8)
+        text = '–' if targets is None else ', '.join(targets) or 'Ohne Zuordnung'
+        tk.Label(cells[2], text=text, background=color, anchor='w').pack(fill='x', expand=True, padx=8)
+        if targets is None:
+            tk.Label(cells[3], text='–', background=color).pack(expand=True)
+        else:
+            if name not in self.group_custom_names:
+                self.group_custom_names[name] = tk.StringVar(
+                    value=board_engine.group_display_name(name, self.config))
+            ttk.Entry(cells[3], textvariable=self.group_custom_names[name], width=10).pack(
+                fill='x', expand=True, padx=6)
+        for cell in cells:
+            cell.bind('<MouseWheel>', self.scroll_group_rows)
+            for widget in cell.winfo_children():
+                widget.bind('<MouseWheel>', self.scroll_group_rows)
+                widget.bind('<FocusOut>', lambda event: self.schedule_group_rows())
 
     def choose_school_logo(self):
         path = filedialog.askopenfilename(title='Schullogo auswählen', filetypes=[('PNG-Bilder','*.png')])
@@ -709,16 +589,27 @@ class Window:
             cfg['school_logo']=self.school_logo.get().strip()
             if cfg['school_logo'] and (not Path(cfg['school_logo']).is_file() or Path(cfg['school_logo']).suffix.lower() != '.png'):
                 raise ValueError('Bitte eine vorhandene PNG-Datei als Schullogo auswählen.')
-            cfg['automatic_group_mapping']=self.automatic_group_mapping.get()
-            for mapping_key in ('group_mappings','teacher_mappings','room_mappings'):
-                cfg[mapping_key]=self.config.get(mapping_key,{})
-            group_name_display = dict(self.config['group_name_display'])
-            for group, checked in self.group_name_options.items():
-                if checked.get() == board_engine.default_group_name_display(group):
-                    group_name_display.pop(group, None)
+            cfg['automatic_group_mapping']=self.config['automatic_group_mapping']
+            for mapping_key in ('group_mappings', 'teacher_mappings', 'room_mappings'):
+                if mapping_key in self.config:
+                    cfg[mapping_key] = self.config[mapping_key]
+            cfg['group_name_display'] = self.config['group_name_display']
+            hidden = set(self.config['hidden_groups'])
+            hidden.difference_update(self.group_visibility)
+            hidden.update(name for name, checked in self.group_visibility.items() if not checked.get())
+            cfg['hidden_groups'] = sorted(hidden)
+            excluded = set(self.config['hidden_grades']) - self.grade_filters.keys()
+            excluded.update(grade for grade, checked in self.grade_filters.items() if not checked.get())
+            cfg['hidden_grades'] = sorted(excluded)
+            cfg['show_unassigned'] = self.show_unassigned.get()
+            custom_names = dict(self.config['group_custom_names'])
+            for name, variable in self.group_custom_names.items():
+                custom_name = variable.get().strip()
+                if custom_name or cfg['group_name_display'] is not None:
+                    custom_names[name] = custom_name
                 else:
-                    group_name_display[group] = checked.get()
-            cfg['group_name_display'] = group_name_display
+                    custom_names.pop(name, None)
+            cfg['group_custom_names'] = custom_names
             duration = self.lesson_duration.get().strip()
             if not re.fullmatch(r'[0-9]{1,4}', duration) or not 1 <= int(duration) < 1440:
                 raise ValueError('Bitte eine gültige Stundenlänge in ganzen Minuten eingeben.')
@@ -745,7 +636,7 @@ class Window:
                 Path(cfg['pdf_folder']).mkdir(parents=True, exist_ok=True)
             if not 1024<=cfg['port']<=65535: raise ValueError('Port muss zwischen 1024 und 65535 liegen')
             if cfg['display_rows'] not in (1,2,3): raise ValueError('Bitte 1, 2 oder 3 Zeilen wählen')
-            if cfg['refresh_seconds']<30 or cfg['course_seconds']<1 or cfg['pdf_seconds']<2: raise ValueError('Ungültige Zeitangabe')
+            if cfg['course_seconds']<1 or cfg['pdf_seconds']<2: raise ValueError('Ungültige Zeitangabe')
             if self.token.get().strip():
                 keyring.set_password(SERVICE,ACCOUNT,self.token.get().strip())
                 self.token.delete(0,'end')
@@ -782,8 +673,9 @@ class Window:
             messagebox.showwarning('Token fehlt','Bitte API-Token eingeben und speichern.')
             return
         os.environ['BESTE_TOKEN']=token
-        board_engine.SETTINGS.update({k:v for k,v in self.config.items() if k in board_engine.SETTINGS})
-        board_engine.cache.update({'at':0,'data':None})
+        with board_engine.lock:
+            board_engine.SETTINGS.update({k:v for k,v in self.config.items() if k in board_engine.SETTINGS})
+            board_engine.cache.update(key=None, data=None)
         host='0.0.0.0' if self.config['lan'] else '127.0.0.1'
         try:
             self.server=create_server(board_engine.app,host=host,port=self.config['port'],threads=4)
@@ -795,6 +687,18 @@ class Window:
         url=f"http://127.0.0.1:{self.config['port']}"
         self.address.set('Auf diesem PC: '+url+ (' | Im Schulnetz: http://<IP-des-Servers>:'+str(self.config['port']) if self.config['lan'] else ''))
         threading.Thread(target=self.serve,daemon=True).start()
+        self.refresh_stop = threading.Event()
+        threading.Thread(target=self.refresh_board, args=(self.refresh_stop,), daemon=True).start()
+
+    @staticmethod
+    def refresh_board(stop):
+        while not stop.is_set():
+            try:
+                board_engine.refresh_board()
+            except Exception:
+                # The board's API reports failures to connected displays.
+                pass
+            stop.wait(5)
 
     def serve(self):
         try: self.server.run()
@@ -804,6 +708,7 @@ class Window:
 
     def stop(self):
         if not self.running:return
+        self.refresh_stop.set()
         try: self.server.close()
         except Exception:pass
         self.server=None;self.running=False

@@ -2,7 +2,7 @@
 import re
 import requests
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 RELEASES_URL = "https://github.com/BigK0815/Schul-Board-Public/releases"
 API_URL = "https://api.github.com/repos/BigK0815/Schul-Board-Public/releases/latest"
 
@@ -18,7 +18,9 @@ def check_for_update(session=None):
             "Accept": "application/vnd.github+json",
             "User-Agent": "Schul-Board-Updatecheck"
         }, timeout=8)
-        if response.status_code in (401, 403, 404):
+        if response.status_code == 404:
+            return ("unavailable", "Für die Updateprüfung ist derzeit kein Release erreichbar.", RELEASES_URL)
+        if response.status_code in (401, 403):
             return ("unavailable",
                     "Das GitHub-Repository ist privat oder nicht öffentlich erreichbar. "
                     "Für die automatische Prüfung ist eine separate GitHub-Authentifizierung nötig.",
