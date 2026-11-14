@@ -10,7 +10,7 @@ from schuldaten import SchoolData
 
 from flask import Flask, jsonify, render_template_string, Response, abort, send_file
 
-SETTINGS = {'switch_seconds':15,'course_seconds':4,'cutoff_hour':15,'start_grade':5,'display_rows':2,'pdf_folder':'','pdf_seconds':12,'group_mappings':{},'group_name_display':None,'group_custom_names':{},'hidden_groups':[],'hidden_grades':[],'lesson_times':{},'school_name':'Musterschule','school_logo':'','automatic_group_mapping':False}
+SETTINGS = {'switch_seconds':15,'course_seconds':4,'cutoff_hour':15,'start_grade':5,'display_rows':2,'pdf_folder':'','pdf_seconds':12,'group_mappings':{},'group_name_display':None,'group_custom_names':{},'hidden_groups':[],'hidden_grades':[],'school_name':'Musterschule','school_logo':'','automatic_group_mapping':False}
 
 app = Flask(__name__)
 cache = {'key': None, 'data': None}
@@ -215,7 +215,7 @@ function render(){if(!data)return;
  document.getElementById('todayTitle').textContent=dayHeading(data.days[0],now);
  document.getElementById('tomorrowTitle').textContent=dayHeading(data.days[1],now);
  refreshInfoDisplay();
- const periodCount=Math.max(8,...Object.keys(BOARD_SETTINGS.lesson_times).map(Number),
+ const periodCount=Math.max(8,...Object.keys((data?.lesson_times ?? {})).map(Number),
   ...Object.values(data.classes).map(lessons=>lessons.reduce((last,l)=>Math.max(last,l.nr),0)));
  board.style.setProperty('--period-count',periodCount);
  if(!levels.length){board.innerHTML='';return;}
@@ -242,7 +242,7 @@ function currentPeriod(times, time){
 function markCurrentPeriod(now){
  const pad=n=>String(n).padStart(2,'0');
  const today=`${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}`;
- const period=currentPeriod(BOARD_SETTINGS.lesson_times,`${pad(now.getHours())}:${pad(now.getMinutes())}`);
+ const period=currentPeriod((data?.lesson_times ?? {}),`${pad(now.getHours())}:${pad(now.getMinutes())}`);
  document.querySelectorAll('#board .day-panel').forEach(panel=>{
   const active=panel.dataset.date===today?period:0;
   panel.querySelectorAll('.class-col,.hour-column').forEach(column=>{
@@ -400,13 +400,13 @@ def resolve_moved_room(lesson, group, destination, regular_by_date):
     return lesson
 
 
-def visible_days(now=None, timetable=None):
+def visible_days(now=None, timetable=None, lesson_times=None):
     """Two school days, advancing at configured cutoff."""
     now = now or datetime.now()  # local clock of the school computer
     cursor = now.date()
     # Keep today's plan visible through the last configured lesson.
     cutoff = max([time(int(SETTINGS['cutoff_hour']), 0)] + [
-        time.fromisoformat(period['end']) for period in SETTINGS['lesson_times'].values()
+        time.fromisoformat(period['end']) for period in (lesson_times or {}).values()
     ])
     if now.time() >= cutoff and cursor.weekday() < 5:
         cursor += timedelta(days=1)
@@ -656,7 +656,6 @@ def build_week(days, timetable, substitutions, automatic_mapping, grades=None):
 def home():
     import json
     client_settings = {
-        'lesson_times': SETTINGS['lesson_times'],
         'switch_seconds': int(SETTINGS['switch_seconds']),
         'course_seconds': int(SETTINGS['course_seconds']),
         'display_rows': int(SETTINGS['display_rows']),
@@ -681,14 +680,16 @@ def refresh_board():
         source = source_for()
         now = datetime.now()
         timetable = source.timetable(now)
-        days = visible_days(now, timetable)
+        lesson_times = source.lesson_times(now)
+        days = visible_days(now, timetable, lesson_times)
         updated, mapping = source.group_snapshot(now)
         substitutions = source.substitution_days(days)
         key = (now.date(), tuple(days), updated, tuple(stamp for stamp, _ in substitutions))
         if cache['key'] != key:
             published = [day for _, day in substitutions if day is not None]
-            cache.update(data=build_week(days, timetable, published, mapping,
-                                         source.read('jahrgaenge-cache')[1]), key=key)
+            data = build_week(days, timetable, published, mapping, source.read('jahrgaenge-cache')[1])
+            data['lesson_times'] = lesson_times
+            cache.update(data=data, key=key)
         return cache['data']
 
 

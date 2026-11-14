@@ -3,7 +3,7 @@ import hashlib
 import json
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from time import monotonic
@@ -93,6 +93,30 @@ class SchoolData:
             raise
         self.timetable_error = None
         return plan
+
+    def lesson_times(self, now):
+        updated, saved = self.read('unterrichtszeiten-cache')
+        if updated and updated.date() == now.date():
+            return saved
+        try:
+            payload = self.get('/time-table-times/current', optional=True) or {}
+            lessons = (payload.get('data') or {}).get('lessons') or []
+            times = {}
+            for lesson in lessons:
+                number = int(lesson['nr'])
+                start, end = (time.fromisoformat(lesson[key]) for key in ('from', 'to'))
+                if number > 0 and start < end:
+                    times[str(number)] = {'start': start.strftime('%H:%M'),
+                                          'end': end.strftime('%H:%M')}
+        except (requests.RequestException, AttributeError, KeyError, TypeError, ValueError):
+            times = {}
+        self.snapshots['unterrichtszeiten-cache'] = (now, times)
+        if times:
+            try:
+                self.write('unterrichtszeiten-cache', now, times)
+            except OSError:
+                pass
+        return times
 
     def substitution_days(self, days):
         wanted = {day.isoformat() for day in days}

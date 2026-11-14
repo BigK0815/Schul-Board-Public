@@ -5,7 +5,6 @@ import re
 import threading
 import tkinter as tk
 import webbrowser
-from datetime import time
 from pathlib import Path
 from tkinter import ttk, messagebox, filedialog, font
 
@@ -14,7 +13,6 @@ import requests
 from waitress import create_server
 import board_engine
 import updater
-from zeitauswahl import choose_time
 from verwaltungsstil import SettingsViewport, apply_style, card, toggle, flow_buttons
 
 ROOT = Path(os.environ.get('APPDATA', str(Path.home()))) / 'StundenplanBoard'
@@ -22,26 +20,7 @@ CONFIG = ROOT / 'einstellungen.json'
 SERVICE = 'StundenplanBoard-beste.schule'
 ACCOUNT = 'api-token'
 DEFAULT = {'port':5000,'lan':False,'switch_seconds':15,
-           'course_seconds':4,'cutoff_hour':15,'start_grade':5,'display_rows':2,'pdf_folder':'','pdf_seconds':12,'group_mappings':{},'group_name_display':None,'group_custom_names':{},'hidden_groups':[],'hidden_grades':[],'show_unassigned':True,'lesson_times':{},'school_name':'Musterschule','school_logo':'','automatic_group_mapping':False}
-
-def lesson_end(start, duration):
-    if not 1 <= duration < 1440:
-        raise ValueError('Bitte eine gültige Stundenlänge in ganzen Minuten eingeben.')
-    start_time = time.fromisoformat(start)
-    minutes = start_time.hour * 60 + start_time.minute + duration
-    if minutes >= 1440:
-        raise ValueError('Das Stundenende muss vor Mitternacht liegen.')
-    return f'{minutes // 60:02d}:{minutes % 60:02d}'
-
-
-def saved_duration(config):
-    if 'lesson_duration' in config:
-        return config['lesson_duration']
-    for period in config['lesson_times'].values():
-        start, end = (time.fromisoformat(period[key]) for key in ('start', 'end'))
-        return (end.hour - start.hour) * 60 + end.minute - start.minute
-    return 45
-
+           'course_seconds':4,'cutoff_hour':15,'start_grade':5,'display_rows':2,'pdf_folder':'','pdf_seconds':12,'group_mappings':{},'group_name_display':None,'group_custom_names':{},'hidden_groups':[],'hidden_grades':[],'show_unassigned':True,'school_name':'Musterschule','school_logo':'','automatic_group_mapping':False}
 
 def natural_name_key(name):
     normalized = name.casefold().translate(str.maketrans('äöü', 'aou'))
@@ -160,43 +139,9 @@ class Window:
         ttk.Button(logo_row, text='Auswählen …', command=self.choose_school_logo).pack(
             side='left', padx=(8, 0))
         times_card = card(times_tab, 'Unterrichtszeiten')
-        duration_row = ttk.Frame(times_card, style='Card.TFrame')
-        duration_row.pack(fill='x', pady=(0, 12))
-        ttk.Label(duration_row, text='Stundenlänge (Minuten)', style='CardTitle.TLabel').pack(side='left')
-        self.lesson_duration = tk.StringVar(value=str(saved_duration(self.config)))
-        ttk.Entry(duration_row, textvariable=self.lesson_duration, width=6).pack(side='left', padx=12)
-        times_table = ttk.Frame(times_card, style='Card.TFrame')
-        times_table.pack(fill='x')
-        for column, heading in enumerate(('Stunde', 'Beginn', 'Ende (automatisch)')):
-            ttk.Label(times_table, text=heading, style='CardTitle.TLabel').grid(
-                row=0, column=column, sticky='w', padx=6)
-        self.lesson_times = {}
-        for period in range(1, 11):
-            ttk.Label(times_table, text=str(period), style='Card.TLabel').grid(
-                row=period, column=0, padx=6)
-            saved = self.config['lesson_times'].get(str(period), {})
-            value = tk.StringVar(value=saved.get('start', ''))
-            self.lesson_times[period] = value
-            button_text = tk.StringVar()
-            end_text = tk.StringVar()
-
-            def refresh_time(*args, start=value, button=button_text, end=end_text):
-                beginning = start.get()
-                button.set(beginning or '—')
-                try:
-                    end.set(lesson_end(beginning, int(self.lesson_duration.get())) if beginning else '—')
-                except ValueError:
-                    end.set('—')
-
-            value.trace_add('write', refresh_time)
-            self.lesson_duration.trace_add('write', refresh_time)
-            refresh_time()
-            ttk.Button(times_table, textvariable=button_text, width=9,
-                       command=lambda v=value, title=f'Beginn der {period}. Stunde':
-                           choose_time(self.root, title, v)).grid(
-                               row=period, column=1, padx=6, pady=2, sticky='ew')
-            ttk.Label(times_table, textvariable=end_text, style='Card.TLabel').grid(
-                row=period, column=2, padx=6, sticky='w')
+        self.lesson_times_text = tk.StringVar(value='Die Zeiten werden beim Board-Start aus beste.schule geladen.')
+        ttk.Label(times_card, textvariable=self.lesson_times_text,
+                  style='Card.TLabel', justify='left', wraplength=480).pack(anchor='w')
 
         api = self.pages['API & Server']
         access = card(api, 'beste.schule API')
@@ -352,6 +297,16 @@ class Window:
 
 
     def poll_group_status(self):
+        board_data = board_engine.cache.get('data') if self.running else None
+        if board_data is None:
+            times_text = 'Die Zeiten werden beim Board-Start aus beste.schule geladen.'
+        else:
+            times = board_data['lesson_times']
+            times_text = '\n'.join(f"{number}. Stunde   {span['start']}–{span['end']}"
+                                   for number, span in sorted(times.items(), key=lambda item: int(item[0])))
+            times_text = times_text or 'Die API hat keine Unterrichtszeiten geliefert.'
+        if self.lesson_times_text.get() != times_text:
+            self.lesson_times_text.set(times_text)
         if not self.group_refresh_pending:
             try:
                 token = self.get_token()
@@ -610,26 +565,6 @@ class Window:
                 else:
                     custom_names.pop(name, None)
             cfg['group_custom_names'] = custom_names
-            duration = self.lesson_duration.get().strip()
-            if not re.fullmatch(r'[0-9]{1,4}', duration) or not 1 <= int(duration) < 1440:
-                raise ValueError('Bitte eine gültige Stundenlänge in ganzen Minuten eingeben.')
-            duration = int(duration)
-            cfg['lesson_duration'] = duration
-            lesson_times = {}
-            previous_end = ''
-            for period, value in self.lesson_times.items():
-                start = value.get()
-                if not start:
-                    continue
-                try:
-                    end = lesson_end(start, duration)
-                except ValueError as exc:
-                    raise ValueError(f'{period}. Stunde: {exc}') from exc
-                if start < previous_end:
-                    raise ValueError(f'{period}. Stunde: Die Unterrichtszeiten überschneiden sich oder sind falsch angeordnet.')
-                lesson_times[str(period)] = {'start': start, 'end': end}
-                previous_end = end
-            cfg['lesson_times'] = lesson_times
             pdf_folder = self.pdf_folder.get().strip()
             cfg['pdf_folder'] = str(Path(pdf_folder).expanduser().resolve()) if pdf_folder else ''
             if cfg['pdf_folder']:
