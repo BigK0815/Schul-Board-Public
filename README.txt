@@ -36,7 +36,7 @@ Nach dem Start zeigt die Verwaltung die Adressen an. Auf jedem Monitor wird die 
 
 1. Unter **API & Server → Redaktion** die Web-Redaktion aktivieren. Der voreingestellte Port ist **8081**. Board und Redaktion benötigen unterschiedliche Ports.
 2. Ein gemeinsames Redaktionspasswort setzen. Die Vorschau verwendet Auflösung und Infobreite des gewählten Monitorprofils.
-3. Speichern und das Schul-Monitor starten. **Redaktion öffnen** öffnet den Editor auf dem Server-PC. Bei aktivierter Schulnetzfreigabe ist die Redaktion über die IP des Server-PCs und den Redaktionsport erreichbar.
+3. Speichern und den Schul-Monitor starten. **Redaktion öffnen** öffnet den Editor auf dem Server-PC. Bei aktivierter Schulnetzfreigabe ist die Redaktion über die IP des Server-PCs und den Redaktionsport erreichbar.
 4. Eine Meldung mit Titel, formatiertem Text, Bildern und Anzeigezeitraum veröffentlichen. Bilder lassen sich an der unteren rechten Ecke proportional vergrößern und verkleinern. Meldungen können an einzelne, mehrere oder alle Monitore gesendet werden. Im Infoteil wechseln sie sich mit Tageshinweisen und PDFs ab. Aktive Vollbildmeldungen ersetzen auf ihren Zielmonitoren den Stundenplan und wechseln sich bei Überschneidungen ab. Nach Ablauf erscheint wieder das normale Board.
 
 Das Redaktionspasswort wird im Windows-Anmeldespeicher gespeichert. Meldungen bleiben lokal in einer SQLite-Datei erhalten. Für den Netzwerkzugriff über eine verschlüsselte Verbindung kann die Schul-IT einen HTTPS-Reverse-Proxy vor die Redaktion setzen.
@@ -45,7 +45,7 @@ Das Redaktionspasswort wird im Windows-Anmeldespeicher gespeichert. Meldungen bl
 
 Das Board ist standardmäßig nur auf dem eigenen Rechner erreichbar. Unter **API & Server → Im Schulnetz erreichbar** kann die Anzeige für Geräte im Schulnetz freigegeben werden. Diese Geräte können die dargestellten Pläne und Aushänge abrufen.
 
-Für ein manuelles Update lässt sich die aktuelle Version in einen neuen Ordner entpacken. Dort einmal **Einmalig_installieren.bat** ausführen und anschließend **Starten.bat** öffnen. Die lokal gespeicherten Einstellungen können weiterverwendet werden. **Auf Updates prüfen** prüft veröffentlichte [GitHub-Releases](https://github.com/BigK0815/Schul-Monitor/releases).
+Für ein manuelles Update lässt sich die aktuelle Version in einen neuen Ordner entpacken. Dort einmal **Einmalig_installieren.bat** ausführen und anschließend **Starten.bat** öffnen. Die lokal gespeicherten Einstellungen können weiterverwendet werden. Aus Kompatibilitätsgründen bleibt der bisherige Windows-Datenordner `StundenplanBoard` erhalten; er darf bei einer Aktualisierung nicht gelöscht werden. **Auf Updates prüfen** prüft veröffentlichte [GitHub-Releases](https://github.com/BigK0815/Schul-Monitor/releases).
 
 ## Lizenz
 
