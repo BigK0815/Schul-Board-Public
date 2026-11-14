@@ -1,9 +1,9 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-title Schul-Board - Einmalige Installation
+title Schul-Monitor - Einmalige Installation
 echo ==========================================================
-echo  Schul-Board - Schul-Board
+echo  Schul-Monitor
 echo  Einrichtung / Aktualisierung
 echo ==========================================================
 echo.

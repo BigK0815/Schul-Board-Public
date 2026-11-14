@@ -306,7 +306,7 @@ function refreshInfoDisplay(){
   currentInfoKey=slide.url;
  }
 }
-async function refreshInfo(){try{const r=await fetch('/api/info/list',{cache:'no-store'});if(!r.ok)throw Error('PDF-Liste nicht erreichbar');const j=await r.json();const signature=JSON.stringify(j.slides);if(signature!==infoSignature){infoSignature=signature;infoSlides=j.slides;infoIndex=0;refreshInfoDisplay();}}catch(e){document.getElementById('infoempty').textContent='Info-Board: '+e.message;}}
+async function refreshInfo(){try{const r=await fetch('/api/info/list',{cache:'no-store'});if(!r.ok)throw Error('PDF-Liste nicht erreichbar');const j=await r.json();const signature=JSON.stringify(j.slides);if(signature!==infoSignature){infoSignature=signature;infoSlides=j.slides;infoIndex=0;refreshInfoDisplay();}}catch(e){document.getElementById('infoempty').textContent='Infobereich: '+e.message;}}
 setInterval(()=>{const slides=allInfoSlides();if(slides.length>1){infoIndex=(infoIndex+1)%slides.length;refreshInfoDisplay();}},Math.max(2,Number(BOARD_SETTINGS.pdf_seconds)||12)*1000);
 document.getElementById('infoimage').addEventListener('error',()=>{currentInfoKey='';refreshInfo();});
 setInterval(refreshInfo,5000);refreshInfo();

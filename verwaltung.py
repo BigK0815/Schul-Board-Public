@@ -60,7 +60,7 @@ def visibility_icons(parent, size):
 class Window:
     def __init__(self, root):
         self.root = root
-        self.root.title('Schul-Board – Verwaltung')
+        self.root.title('Schul-Monitor – Verwaltung')
         width = min(1200, max(1, root.winfo_screenwidth() - 64))
         height = min(920, max(1, root.winfo_screenheight() - 120))
         self.root.minsize(min(880, width), min(420, height))
@@ -78,7 +78,7 @@ class Window:
 
         shell = ttk.Frame(root, padding=12)
         shell.pack(fill='both', expand=True)
-        ttk.Label(shell, text='Schul-Board – Verwaltung',
+        ttk.Label(shell, text='Schul-Monitor – Verwaltung',
                   font=('Segoe UI', 17, 'bold')).pack(anchor='w', pady=(0,10))
         body = ttk.Frame(shell)
         body.pack(fill='both', expand=True, side='top')
@@ -261,7 +261,7 @@ class Window:
         footer.pack(side='bottom', fill='x', pady=(6, 0))
         ttk.Button(footer, text='Speichern', command=self.save, style='Accent.TButton')
         ttk.Button(footer, text='Im Browser öffnen', command=self.open)
-        self.start_btn = ttk.Button(footer, text='Board starten', command=self.start)
+        self.start_btn = ttk.Button(footer, text='Schul-Monitor starten', command=self.start)
         self.stop_btn = ttk.Button(footer, text='Server stoppen', command=self.stop, state='disabled')
         ttk.Button(footer, text='Beenden', command=self.close)
         ttk.Button(footer, text='Auf Updates prüfen', command=self.check_updates)
@@ -707,21 +707,21 @@ class Window:
 
     def check_updates(self):
         """Prüft Releases im Hintergrund, ohne Dateien zu verändern."""
-        self.status.set('Suche nach Schul-Board-Updates …')
+        self.status.set('Suche nach Schul-Monitor-Updates …')
         def run():
             result, message, url = updater.check_for_update()
             def show():
                 self.status.set(message)
                 if result == 'available':
-                    if messagebox.askyesno('Schul-Board – Update verfügbar',
+                    if messagebox.askyesno('Schul-Monitor – Update verfügbar',
                                            message + '\n\nRelease-Seite im Browser öffnen?'):
                         webbrowser.open(url)
                 elif result == 'unavailable':
-                    if messagebox.askyesno('Schul-Board – Updateprüfung',
+                    if messagebox.askyesno('Schul-Monitor – Updateprüfung',
                                            message + '\n\nGitHub im Browser öffnen?'):
                         webbrowser.open(url)
                 else:
-                    messagebox.showinfo('Schul-Board – Updateprüfung', message)
+                    messagebox.showinfo('Schul-Monitor – Updateprüfung', message)
             self.root.after(0, show)
         threading.Thread(target=run, daemon=True).start()
 

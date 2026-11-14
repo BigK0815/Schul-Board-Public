@@ -1,9 +1,9 @@
 <!doctype html>
 <html lang="de"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Schul-Board · Redaktion</title>
+<title>Schul-Monitor · Redaktion</title>
 <link rel="stylesheet" href="/editor/redaktion.css"><link rel="stylesheet" href="/editor/meldung.css">
 <body data-csrf="{{ csrf }}" data-monitors="{{ monitors|tojson|forceescape }}">
-<header><strong>Schul-Board · Redaktion</strong>{% if authenticated %}<button id="logout">Abmelden</button>{% endif %}</header>
+<header><strong>Schul-Monitor · Redaktion</strong>{% if authenticated %}<button id="logout">Abmelden</button>{% endif %}</header>
 {% if authenticated %}
 <main>
 <section class="card">
