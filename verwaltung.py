@@ -2,6 +2,8 @@
 import json
 import os
 import re
+import subprocess
+import sys
 import threading
 import tkinter as tk
 import webbrowser
@@ -16,6 +18,42 @@ import updater
 from redaktion import editor_app
 from monitorprofile import FIELDS, default_profile, load_profiles, validate_profiles
 from verwaltungsstil import SettingsViewport, apply_style, card, toggle, flow_buttons
+
+if os.name == 'nt':
+    import winreg
+
+AUTOSTART_KEY = r'Software\Microsoft\Windows\CurrentVersion\Run'
+AUTOSTART_NAME = 'Schul-Monitor'
+
+
+def autostart_enabled():
+    if os.name != 'nt':
+        return False
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, AUTOSTART_KEY) as key:
+            winreg.QueryValueEx(key, AUTOSTART_NAME)
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def set_autostart(enabled):
+    if os.name != 'nt':
+        return
+    if enabled:
+        script = Path(__file__).resolve()
+        python = Path(sys.executable).absolute().with_name('pythonw.exe')
+        if not python.is_file():
+            raise ValueError('pythonw.exe fehlt. Bitte die Windows-Installation erneut ausführen.')
+        command = subprocess.list2cmdline([str(python), str(script), '--autostart'])
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, AUTOSTART_KEY, 0, winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key, AUTOSTART_NAME, 0, winreg.REG_SZ, command)
+    else:
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, AUTOSTART_KEY, 0, winreg.KEY_SET_VALUE) as key:
+                winreg.DeleteValue(key, AUTOSTART_NAME)
+        except FileNotFoundError:
+            pass
 
 # Historischer Datenordner: aus Kompatibilitätsgründen nicht umbenennen.
 ROOT = Path(os.environ.get('APPDATA', str(Path.home()))) / 'StundenplanBoard'
@@ -137,6 +175,14 @@ class Window:
         self.lan = tk.BooleanVar(value=self.config['lan'])
         server = card(api, 'Server')
         toggle(server, 'Im Schulnetz erreichbar', self.lan).pack(anchor='w')
+        self.autostart = tk.BooleanVar(value=autostart_enabled())
+        startup_switch = toggle(server, 'Mit Windows starten', self.autostart)
+        startup_switch.pack(anchor='w', pady=(8, 0))
+        if os.name != 'nt':
+            startup_switch.state(['disabled'])
+        ttk.Label(server, text='Startet den Server bei der Windows-Anmeldung mit den '
+                  'gespeicherten Einstellungen.', style='CardMuted.TLabel',
+                  wraplength=430).pack(anchor='w')
 
         editor = card(api, 'Redaktion')
         self.editor_enabled = tk.BooleanVar(value=self.config['editor_enabled'])
@@ -602,6 +648,8 @@ class Window:
                 raise ValueError('Redaktionsport muss zwischen 1024 und 65535 liegen.')
             cfg['monitors'] = self.monitor_settings()
             validate_profiles(cfg['monitors'], cfg['editor_port'] if cfg['editor_enabled'] else None)
+            if self.autostart.get() and not self.get_token():
+                raise ValueError('Für den Windows-Autostart bitte einen API-Token speichern.')
             password = self.editor_password.get()
             if cfg['editor_enabled'] and not (password or keyring.get_password(SERVICE, EDITOR_ACCOUNT)):
                 raise ValueError('Bitte ein Redaktionspasswort eingeben.')
@@ -613,6 +661,7 @@ class Window:
                 self.token.delete(0,'end')
             CONFIG.write_text(json.dumps(cfg,indent=2,ensure_ascii=False),encoding='utf-8')
             self.config=cfg
+            set_autostart(self.autostart.get())
             self.status.set('Einstellungen gespeichert')
             return True
         except Exception as e:
@@ -638,23 +687,32 @@ class Window:
         threading.Thread(target=run,daemon=True).start()
 
     def start(self):
-        if self.running or not self.save():return
-        token=self.get_token()
-        if not token:
-            messagebox.showwarning('Token fehlt','Bitte API-Token eingeben und speichern.')
+        if not self.running and self.save():
+            self.start_saved()
+
+    def start_saved(self):
+        if self.running:
             return
-        os.environ['BESTE_TOKEN']=token
-        with board_engine.lock:
-            board_engine.cache.clear()
-        host = '0.0.0.0' if self.config['lan'] else '127.0.0.1'
         try:
-            for profile in self.config['monitors']:
+            token = keyring.get_password(SERVICE, ACCOUNT)
+            if not token:
+                raise ValueError('Bitte API-Token eingeben und speichern.')
+            profiles = load_profiles(self.config)
+            validate_profiles(profiles, self.config['editor_port'] if self.config['editor_enabled'] else None)
+            os.environ['BESTE_TOKEN'] = token
+            with board_engine.lock:
+                board_engine.cache.clear()
+            host = '0.0.0.0' if self.config['lan'] else '127.0.0.1'
+            for profile in profiles:
                 settings = {**board_engine.DEFAULT_SETTINGS, **self.config, **profile}
                 settings['hidden_grades'] = sorted(set(self.config['hidden_grades']) | set(profile['hidden_grades']))
                 self.servers.append(create_server(board_engine.monitor_app(settings), host=host,
                                                   port=profile['port'], threads=4))
             if self.config['editor_enabled']:
-                editor = editor_app(keyring.get_password(SERVICE, EDITOR_ACCOUNT), self.config['monitors'])
+                password = keyring.get_password(SERVICE, EDITOR_ACCOUNT)
+                if not password:
+                    raise ValueError('Bitte ein Redaktionspasswort speichern.')
+                editor = editor_app(password, profiles)
                 self.editor_server = create_server(editor, host=host, port=self.config['editor_port'],
                                                    threads=4, max_request_body_size=12 * 1024 * 1024)
         except Exception as error:
@@ -668,7 +726,7 @@ class Window:
         self.stop_btn.configure(state='normal')
         self.status.set('Server läuft')
         address = '<IP-des-Servers>' if self.config['lan'] else '127.0.0.1'
-        links = [f"{item['name']}: http://{address}:{item['port']}" for item in self.config['monitors']]
+        links = [f"{item['name']}: http://{address}:{item['port']}" for item in profiles]
         if self.editor_server:
             links.append(f"Redaktion: http://{address}:{self.config['editor_port']}")
             threading.Thread(target=self.serve, args=(self.editor_server,), daemon=True).start()
@@ -698,7 +756,8 @@ class Window:
     def open(self):
         if not self.running:
             messagebox.showinfo('Server gestoppt','Bitte zuerst den Server starten.');return
-        profile = self.config['monitors'][min(self.monitor_selection.current(), len(self.servers)-1)]
+        profiles = load_profiles(self.config)
+        profile = profiles[min(self.monitor_selection.current(), len(self.servers)-1)]
         webbrowser.open(f"http://127.0.0.1:{profile['port']}")
 
     def open_editor(self):
@@ -734,6 +793,9 @@ class Window:
         self.root.destroy()
 
 if __name__=='__main__':
+    startup = '--autostart' in sys.argv
+    if startup:
+        os.chdir(Path(__file__).resolve().parent)
     if os.name == 'nt':
         import ctypes
 
@@ -742,5 +804,7 @@ if __name__=='__main__':
     root=tk.Tk()
     try: ttk.Style().theme_use('vista')
     except tk.TclError: pass
-    Window(root)
+    window = Window(root)
+    if startup and window.autostart.get():
+        root.after_idle(window.start_saved)
     root.mainloop()

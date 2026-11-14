@@ -11,6 +11,10 @@ Schul-Monitor zeigt Stunden- und Vertretungspläne aus **beste.schule** zusammen
 4. Unter **API & Server** den API-Token der eigenen Schule eintragen, die Verbindung testen und speichern. Für die automatische Klassenzuordnung benötigt der Token Zugriff auf die Gruppenmitgliedschaften.
 5. **Schul-Monitor starten** und **Im Browser öffnen** wählen. Mit **F11** kann der Browser in den Vollbildmodus wechseln.
 
+## Windows-Autostart
+
+Unter **API & Server → Server** **Mit Windows starten** einschalten und **Speichern** klicken. Bei der nächsten Windows-Anmeldung unter demselben Benutzerkonto öffnet sich die Verwaltung und startet den Server mit den zuletzt gespeicherten Einstellungen. Das gilt auch für alle Monitorprofile und die Web-Redaktion, sofern sie aktiviert ist. Der Autostart setzt eine Windows-Anmeldung voraus. Zum Abschalten den Schalter deaktivieren und erneut speichern.
+
 ## Anzeige einrichten
 
 - **Klassen & Gruppen** zeigt zuerst die Hauptklassen und danach die Gruppen. Jahrgänge lassen sich gesammelt ausblenden. Gruppen ohne Zuordnung können in der Tabelle ausgeblendet werden.
