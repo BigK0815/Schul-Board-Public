@@ -98,26 +98,7 @@ class Window:
             self.nav_markers[name] = marker
 
         general = self.pages['Allgemein']
-        tabs = ttk.Frame(general)
-        tabs.pack(fill='x', pady=(0, 10))
-        school_tab = ttk.Frame(general)
-        times_tab = ttk.Frame(general)
-
-        def select_tab(selected):
-            for panel, button in tab_buttons.items():
-                panel.pack_forget()
-                button.configure(style='SelectedNav.TButton' if panel is selected else 'Nav.TButton')
-            selected.pack(fill='x')
-            self.viewport.canvas.yview_moveto(0)
-            self.viewport.after_idle(self.viewport.refresh)
-
-        tab_buttons = {}
-        for panel, label in ((school_tab, 'Schule'), (times_tab, 'Unterrichtszeiten')):
-            button = ttk.Button(tabs, text=label, command=lambda p=panel: select_tab(p))
-            button.pack(side='left', padx=(0, 6))
-            tab_buttons[panel] = button
-        select_tab(school_tab)
-        school = card(school_tab, 'Schule')
+        school = card(general, 'Schule')
         fields = ttk.Frame(school, style='Card.TFrame')
         fields.pack(fill='x')
         fields.columnconfigure(1, weight=1)
@@ -138,11 +119,6 @@ class Window:
             side='left', fill='x', expand=True)
         ttk.Button(logo_row, text='Auswählen …', command=self.choose_school_logo).pack(
             side='left', padx=(8, 0))
-        times_card = card(times_tab, 'Unterrichtszeiten')
-        self.lesson_times_text = tk.StringVar(value='Die Zeiten werden beim Board-Start aus beste.schule geladen.')
-        ttk.Label(times_card, textvariable=self.lesson_times_text,
-                  style='Card.TLabel', justify='left', wraplength=480).pack(anchor='w')
-
         api = self.pages['API & Server']
         access = card(api, 'beste.schule API')
         ttk.Label(access, text='Token (sicher im Windows-Anmeldespeicher)',
@@ -297,16 +273,6 @@ class Window:
 
 
     def poll_group_status(self):
-        board_data = board_engine.cache.get('data') if self.running else None
-        if board_data is None:
-            times_text = 'Die Zeiten werden beim Board-Start aus beste.schule geladen.'
-        else:
-            times = board_data['lesson_times']
-            times_text = '\n'.join(f"{number}. Stunde   {span['start']}–{span['end']}"
-                                   for number, span in sorted(times.items(), key=lambda item: int(item[0])))
-            times_text = times_text or 'Die API hat keine Unterrichtszeiten geliefert.'
-        if self.lesson_times_text.get() != times_text:
-            self.lesson_times_text.set(times_text)
         if not self.group_refresh_pending:
             try:
                 token = self.get_token()

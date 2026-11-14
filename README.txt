@@ -7,7 +7,7 @@ Schul-Board zeigt Stunden- und Vertretungspläne aus **beste.schule** zusammen m
 
 1. Das Repository über **Code → Download ZIP** herunterladen und entpacken.
 2. **Einmalig_installieren.bat** ausführen. Das Skript richtet die Python-Umgebung ein und bietet bei Bedarf die Installation von Python an.
-3. **Starten.bat** öffnen. Unter **Allgemein → Schule** den Beispielnamen „Musterschule“ ersetzen und optional ein eigenes PNG-Logo wählen.
+3. **Starten.bat** öffnen. Unter **Allgemein** den Beispielnamen „Musterschule“ ersetzen und optional ein eigenes PNG-Logo wählen.
 4. Unter **API & Server** den API-Token der eigenen Schule eintragen, die Verbindung testen und speichern. Für die automatische Klassenzuordnung benötigt der Token Zugriff auf die Gruppenmitgliedschaften.
 5. **Board starten** und **Im Browser öffnen** wählen. Mit **F11** kann der Browser in den Vollbildmodus wechseln.
 
@@ -15,7 +15,7 @@ Schul-Board zeigt Stunden- und Vertretungspläne aus **beste.schule** zusammen m
 
 - **Klassen & Gruppen** zeigt zuerst die Hauptklassen und danach die Gruppen. Jahrgänge lassen sich gesammelt ausblenden. Gruppen ohne Zuordnung können in der Tabelle ausgeblendet werden.
 - In der Spalte **Anzeigen** schaltet ein Klick in die Zelle die Klasse oder Gruppe auf dem Board ein oder aus. Der **Eigene Anzeigename** ersetzt das Fachkürzel. Bei leerem Feld wird das Fachkürzel angezeigt.
-- Unter **Allgemein → Unterrichtszeiten** zeigt das Programm das täglich aus beste.schule geladene Zeitraster. Sobald eine Stunde endet, wechselt die grüne Markierung zur nächsten Stunde. Ohne Zeitraster zeigt das Board den Plan ohne Zeitmarkierung.
+- Das Board übernimmt das Zeitraster täglich aus beste.schule. Sobald eine Stunde endet, wechselt die grüne Markierung zur nächsten Stunde. Ohne Zeitraster zeigt das Board den Plan ohne Zeitmarkierung.
 - Unter **Anzeige & PDFs** lassen sich der Wechsel zwischen Jahrgängen und die Dauer der PDF-Anzeige einstellen. Ein Dateiname wie `01122026-18122026.pdf` begrenzt einen Aushang auf diesen Zeitraum einschließlich beider Tage.
 
 ## Datenabruf und lokale Speicherung
