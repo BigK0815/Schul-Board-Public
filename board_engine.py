@@ -10,7 +10,7 @@ from schuldaten import SchoolData
 
 from flask import Flask, jsonify, render_template_string, Response, abort, send_file
 
-SETTINGS = {'switch_seconds':15,'course_seconds':4,'cutoff_hour':15,'start_grade':5,'display_rows':2,'pdf_folder':'','pdf_seconds':12,'group_mappings':{},'group_name_display':None,'group_custom_names':{},'hidden_groups':[],'hidden_grades':[],'school_name':'Musterschule','school_logo':'','automatic_group_mapping':False}
+SETTINGS = {'switch_seconds':15,'course_seconds':4,'cutoff_hour':15,'start_grade':5,'display_rows':2,'info_width':33,'visible_periods':list(range(1, 9)),'pdf_folder':'','pdf_seconds':12,'group_mappings':{},'group_name_display':None,'group_custom_names':{},'hidden_groups':[],'hidden_grades':[],'school_name':'Musterschule','school_logo':'','automatic_group_mapping':False}
 
 app = Flask(__name__)
 cache = {'key': None, 'data': None}
@@ -46,21 +46,19 @@ header{height:clamp(54px,8.4vh,90px);background:linear-gradient(110deg,#073c60,#
 header img{height:clamp(44px,7.6vh,80px);width:auto;max-width:8vw;object-fit:contain;background:#fff;border-radius:8px;padding:3px}
 header h1{font-size:clamp(17px,2.35vw,43px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin:0;font-weight:700;letter-spacing:.1px}
 #clock{margin-left:auto;white-space:nowrap;font-size:clamp(12px,1.45vw,27px);font-weight:600}
-main{height:calc(100dvh - clamp(54px,8.4vh,90px));display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:var(--board-gap);padding:clamp(6px,.8vw,14px)}
+main{height:calc(100dvh - clamp(54px,8.4vh,90px));display:grid;grid-template-columns:minmax(0,1fr) var(--info-width,33vw);gap:var(--board-gap);padding:clamp(6px,.8vw,14px)}
 #left{display:flex;flex-direction:column;min-width:0;min-height:0;gap:clamp(5px,.65vh,10px)}
-#dayhead{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);column-gap:var(--day-gap);height:clamp(30px,5vh,50px);flex:0 0 auto}
-#dayhead .date-head{display:flex;align-items:center;justify-content:center;background:var(--navy);color:#fff;border-radius:7px;font-weight:700;font-size:clamp(12px,1.35vw,25px);white-space:nowrap;overflow:hidden}
+.date-head{display:flex;align-items:center;justify-content:center;background:var(--navy);color:#fff;border-radius:7px;font-weight:700;font-size:clamp(12px,1.35vw,25px);white-space:nowrap;overflow:hidden;writing-mode:vertical-rl;rotate:180deg}
 #daynotes{display:none;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--day-gap);flex:0 0 auto;min-width:0}
 #daynotes.visible{display:grid}
 .day-note{height:clamp(25px,3.5vh,38px);display:flex;align-items:center;gap:7px;padding:2px 9px;background:#dcecff;color:#123d64;border:1px solid #bbd7f5;border-radius:6px;min-width:0;font-size:clamp(10px,.9vw,17px);font-weight:600}
 .day-note.empty{visibility:hidden}
 .day-note .info-symbol{font-weight:800;border-radius:50%;background:#2876c5;color:white;width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center;flex:none;font-size:12px}
 .day-note .note-text{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
-#board{display:grid;grid-template-rows:repeat(var(--display-rows,2),minmax(0,1fr));gap:clamp(10px,1.6vh,22px);flex:1;min-height:0;--day-gap:clamp(14px,1.4vw,30px)}
+#board{display:grid;grid-template-rows:repeat(2,minmax(0,1fr));gap:clamp(10px,1.6vh,22px);flex:1;min-height:0;--day-gap:clamp(14px,1.4vw,30px)}
 #left{--day-gap:clamp(14px,1.4vw,30px)}
-.level{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:var(--day-gap);min-width:0;min-height:0;background:#fff;border-radius:10px;padding:clamp(3px,.35vw,7px);box-shadow:0 1px 5px #a4bfd144}
-.grade-label{background:var(--navy);color:white;border-radius:7px;display:flex;align-items:center;justify-content:center;writing-mode:vertical-rl;transform:none;rotate:180deg;font-size:clamp(10px,1.1vw,19px);font-weight:700;white-space:nowrap;overflow:hidden}
-.day-panel{display:grid;grid-template-columns:var(--hour-column-width) minmax(0,1fr);min-width:0;min-height:0;overflow:hidden}
+.day-panel{display:grid;grid-template-columns:clamp(28px,3vw,50px) var(--hour-column-width) minmax(0,1fr);min-width:0;min-height:0;overflow:hidden}
+.grade-groups{display:grid;gap:var(--day-gap);min-width:0;min-height:0}
 .hour-column{display:grid;grid-template-rows:clamp(24px,4.3vh,41px) repeat(var(--period-count,8),minmax(0,1fr));min-height:0}
 .hour-column .hour{background:#fff;border:1px solid var(--grid);display:flex;align-items:center;justify-content:center;font-size:var(--font);font-weight:700;min-height:0}
 .class-grid{display:grid;grid-template-columns:repeat(var(--class-count),minmax(0,1fr));gap:clamp(2px,.25vw,5px);min-height:0;min-width:0}
@@ -102,13 +100,7 @@ main{height:calc(100dvh - clamp(54px,8.4vh,90px));display:grid;grid-template-col
 @media(max-width:1000px){:root{--font:clamp(7px,.78vw,12px);--small:clamp(6px,.6vw,9px)}.mini{flex-direction:row;justify-content:flex-start;gap:2px}.grade-label{font-size:10px}header h1{font-size:clamp(15px,2vw,22px)}}
 @media(max-height:700px){.class-col,.hour-column{grid-template-rows:22px repeat(var(--period-count,8),minmax(0,1fr))}.mini{flex-direction:row;gap:2px;justify-content:flex-start}}
 
-/* Freigegebenes Layout: Tage nebeneinander, zwei Jahrgaenge untereinander. */
-#left{--day-gap:clamp(16px,1.6vw,34px);--hour-column-width:clamp(17px,1.55vw,29px)}
-#dayhead{grid-template-columns:repeat(2,minmax(0,1fr));column-gap:var(--day-gap)}
-#tomorrowTitle{margin-inline-start:var(--hour-column-width)}
-.level{grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--day-gap)}
-.hidden-hours .hour{visibility:hidden;border-color:transparent;background:transparent!important}
-.hidden-hours{visibility:hidden}
+#left{--hour-column-width:clamp(17px,1.55vw,29px)}
 .slot{justify-content:flex-start;text-align:left;padding:0 2px}
 .slot .mini{display:flex;flex-direction:row;justify-content:flex-start;align-items:center;gap:3px;padding:0 1px;min-width:0;width:100%;height:100%}
 .slot .subject{font-weight:700;flex:0 0 auto;max-width:none;overflow:visible;text-overflow:clip;white-space:nowrap}
@@ -120,7 +112,7 @@ main{height:calc(100dvh - clamp(54px,8.4vh,90px));display:grid;grid-template-col
 .slot.current-period:not(.canceled),.hour-column .hour.current-period{background:#79e64e!important}
 </style></head><body>
 <header><img src="/assets/schullogo.png" alt="Schullogo"><h1>__SCHOOL_NAME__</h1><div id="clock"></div></header>
-<main><div id="left"><div id="dayhead"><div class="date-head" id="todayTitle">Heute</div><div class="date-head" id="tomorrowTitle">Morgen</div></div><div id="board"></div></div><aside id="infoboard"><div id="infohead">Infos &amp; Termine</div><div id="infocontent"><div id="infonote"></div><img id="infoimage" alt="Informationen aus PDF"><div id="infoempty">Keine PDF-Dateien im Info-Ordner</div></div></aside></main><div id="copyright">(c) 2026 Robert Kettmann</div>
+<main><div id="left"><div id="board"></div></div><aside id="infoboard"><div id="infohead">Infos &amp; Termine</div><div id="infocontent"><div id="infonote"></div><img id="infoimage" alt="Informationen aus PDF"><div id="infoempty">Keine PDF-Dateien im Info-Ordner</div></div></aside></main><div id="copyright">(c) 2026 Robert Kettmann</div>
 <script>
 const BOARD_SETTINGS=__BOARD_SETTINGS_JSON__;
 let data=null,index=0,lastChange=Date.now(),coursePhase=0,notePhase=0;
@@ -170,14 +162,20 @@ function fitCells(){
  });
 }
 
-function renderDay(names,dayIndex,periodCount){
- const iso=data.days[dayIndex];let hour='<div></div>';
- for(let n=1;n<=periodCount;n++)hour+=`<div class="hour">${n}</div>`;
- let columns=names.map(name=>{const lessons=data.classes[name]||[];const byNr={};for(const l of lessons){if(l.day===iso)(byNr[l.nr]??=[]).push(l);}
- let content=`<div class="class-name">${escapeHtml(name)}</div>`;
- for(let n=1;n<=periodCount;n++)content+=cell(byNr[n],dayIndex,n);
- return `<div class="class-col">${content}</div>`;}).join('');
- return `<div class="day-panel" data-date="${iso}">${dayIndex===0?`<div class="hour-column">${hour}</div>`:`<div class="hour-column hidden-hours">${hour}</div>`}<div class="class-grid" style="--class-count:${Math.max(1,names.length)}">${columns}</div></div>`;
+function renderDay(groups,dayIndex,periods,now){
+ const iso=data.days[dayIndex];
+ const hours=periods.map(n=>`<div class="hour" data-period="${n}">${n}</div>`).join('');
+ const grids=groups.map(names=>{
+  const columns=names.map(name=>{
+   const byNr={};
+   for(const lesson of data.classes[name])if(lesson.day===iso)(byNr[lesson.nr]??=[]).push(lesson);
+   const slots=periods.map(n=>cell(byNr[n],dayIndex,n)).join('');
+   return `<div class="class-col"><div class="class-name">${escapeHtml(name)}</div>${slots}</div>`;
+  }).join('');
+  return `<div class="class-grid" style="--class-count:${names.length}">${columns}</div>`;
+ }).join('');
+ const widths=groups.map(names=>`minmax(0,${names.length}fr)`).join(' ');
+ return `<section class="day-panel" data-date="${iso}"><div class="date-head">${escapeHtml(dayHeading(iso,now))}</div><div class="hour-column"><div></div>${hours}</div><div class="grade-groups" style="grid-template-columns:${widths}">${grids}</div></section>`;
 }
 function collectInfoNotes(){
  if(!data)return [];
@@ -210,18 +208,17 @@ function notePages(){
  push();probe.remove();return pages;
 }
 function render(){if(!data)return;
- const rows=Math.max(1,Math.min(3,Number(BOARD_SETTINGS.display_rows)||2));const board=document.getElementById('board');board.style.setProperty('--display-rows',rows);
+ const rows=Math.max(1,Math.min(3,Number(BOARD_SETTINGS.display_rows)||2));
+ const board=document.getElementById('board');
  const now=new Date();
- document.getElementById('todayTitle').textContent=dayHeading(data.days[0],now);
- document.getElementById('tomorrowTitle').textContent=dayHeading(data.days[1],now);
+ const periods=BOARD_SETTINGS.visible_periods;
  refreshInfoDisplay();
- const periodCount=Math.max(8,...Object.keys((data?.lesson_times ?? {})).map(Number),
-  ...Object.values(data.classes).map(lessons=>lessons.reduce((last,l)=>Math.max(last,l.nr),0)));
- board.style.setProperty('--period-count',periodCount);
+ board.style.setProperty('--period-count',periods.length);
  if(!levels.length){board.innerHTML='';return;}
  const selected=Array.from({length:Math.min(rows,levels.length)},(_,i)=>levels[(index+i)%levels.length]);
- board.innerHTML=selected.map(level=>{const names=Object.keys(data.classes).filter(k=>gradeOf(k)===level).sort((a,b)=>a.localeCompare(b,'de',{numeric:true}));
- return `<section class="level">${renderDay(names,0,periodCount)}${renderDay(names,1,periodCount)}</section>`;}).join('');
+ const groups=selected.map(level=>Object.keys(data.classes).filter(k=>gradeOf(k)===level)
+  .sort((a,b)=>a.localeCompare(b,'de',{numeric:true})));
+ board.innerHTML=data.days.map((_,i)=>renderDay(groups,i,periods,now)).join('');
  markCurrentPeriod(now);
  requestAnimationFrame(fitCells);
 }
@@ -236,18 +233,19 @@ if(newLevels.join(',')!==levels.join(',')){
 data=j;render();}catch(e){document.getElementById('board').innerHTML='<div class="error">'+escapeHtml(e.message)+'</div>';}}
 function currentPeriod(times, time){
  const periods=Object.keys(times);
- if(!periods.length || time<times[periods[0]].start)return 0;
- return Number(periods.find(n=>time<times[n].end)||0);
+ if(!periods.length || time<times[periods[0]].start)return null;
+ const current=periods.find(n=>time<times[n].end);
+ return current===undefined?null:Number(current);
 }
 function markCurrentPeriod(now){
  const pad=n=>String(n).padStart(2,'0');
  const today=`${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}`;
  const period=currentPeriod((data?.lesson_times ?? {}),`${pad(now.getHours())}:${pad(now.getMinutes())}`);
  document.querySelectorAll('#board .day-panel').forEach(panel=>{
-  const active=panel.dataset.date===today?period:0;
+  const active=panel.dataset.date===today?period:null;
   panel.querySelectorAll('.class-col,.hour-column').forEach(column=>{
    for(let n=1;n<column.children.length;n++)
-    column.children[n].classList.toggle('current-period',n===active);
+    column.children[n].classList.toggle('current-period',BOARD_SETTINGS.visible_periods[n-1]===active);
   });
  });
 }
@@ -283,7 +281,7 @@ def ident(obj):
     return str((obj or {}).get('local_id') or (obj or {}).get('name') or '') if isinstance(obj, dict) else ''
 
 def details(item):
-    return {'weekday': int(item.get('weekday') or 0), 'nr': int(item.get('nr') or 0), 'subject': ident(item.get('subject')), 'teacher': ', '.join(filter(None, [ident(x) for x in (item.get('teachers') or [])])), 'room': ', '.join(filter(None, [ident(x) for x in (item.get('rooms') or [])])), 'status': item.get('status', 'initial'), 'changed': False, 'note': ''}
+    return {'weekday': int(item.get('weekday') or 0), 'nr': int(item.get('nr') if item.get('nr') is not None else -1), 'subject': ident(item.get('subject')), 'teacher': ', '.join(filter(None, [ident(x) for x in (item.get('teachers') or [])])), 'room': ', '.join(filter(None, [ident(x) for x in (item.get('rooms') or [])])), 'status': item.get('status', 'initial'), 'changed': False, 'note': ''}
 
 def group_display_name(group, settings):
     names = settings['group_custom_names']
@@ -528,7 +526,7 @@ def build_week(days, timetable, substitutions, automatic_mapping, grades=None):
         if group in hidden or not target_classes(group, classes, automatic_mapping):
             continue
         lesson = details(item)
-        if 1 <= lesson['weekday'] <= 5 and 1 <= lesson['nr'] <= 10:
+        if 1 <= lesson['weekday'] <= 5 and 0 <= lesson['nr'] <= 10:
             regular.setdefault((group, lesson['weekday'], lesson['nr']), []).append(lesson)
             for d in reference_days:
                 if d.isoweekday() == lesson['weekday'] and applicable(item, d):
@@ -564,10 +562,10 @@ def build_week(days, timetable, substitutions, automatic_mapping, grades=None):
         for raw in raw_lessons:
             raw_group = ident(raw.get('group'))
             try:
-                raw_nr = int(raw.get('nr') or 0)
+                raw_nr = int(raw.get('nr') if raw.get('nr') is not None else -1)
             except (ValueError, TypeError):
                 continue
-            if raw_group and 1 <= raw_nr <= 10:
+            if raw_group and 0 <= raw_nr <= 10:
                 mentioned.add((raw_group, weekday, raw_nr))
         moved_from = set()
         planned_by_course = {}
@@ -594,7 +592,7 @@ def build_week(days, timetable, substitutions, automatic_mapping, grades=None):
                 continue
             lesson = details(item)
             lesson['weekday'] = weekday
-            if not 1 <= lesson['nr'] <= 10:
+            if not 0 <= lesson['nr'] <= 10:
                 continue
             originals = regular_by_date[day_iso].get((group, weekday, lesson['nr']), [])
             if lesson['status'] == 'canceled' and originals:
@@ -659,12 +657,14 @@ def home():
         'switch_seconds': int(SETTINGS['switch_seconds']),
         'course_seconds': int(SETTINGS['course_seconds']),
         'display_rows': int(SETTINGS['display_rows']),
+        'visible_periods': SETTINGS['visible_periods'],
         'start_grade': int(SETTINGS['start_grade']),
         'pdf_seconds': int(SETTINGS['pdf_seconds']),
     }
     from markupsafe import escape
     html = HTML.replace('__BOARD_SETTINGS_JSON__', json.dumps(client_settings))
     html = html.replace('__SCHOOL_NAME__', str(escape(SETTINGS.get('school_name') or 'Musterschule')))
+    html = html.replace('<main>', f'<main style="--info-width:{int(SETTINGS['info_width'])}vw">', 1)
     return render_template_string(html)
 
 @app.get('/assets/schullogo.png')

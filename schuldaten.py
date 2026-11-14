@@ -105,7 +105,7 @@ class SchoolData:
             for lesson in lessons:
                 number = int(lesson['nr'])
                 start, end = (time.fromisoformat(lesson[key]) for key in ('from', 'to'))
-                if number > 0 and start < end:
+                if number >= 0 and start < end:
                     times[str(number)] = {'start': start.strftime('%H:%M'),
                                           'end': end.strftime('%H:%M')}
         except (requests.RequestException, AttributeError, KeyError, TypeError, ValueError):

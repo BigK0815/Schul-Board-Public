@@ -16,7 +16,7 @@ Schul-Board zeigt Stunden- und Vertretungspläne aus **beste.schule** zusammen m
 - **Klassen & Gruppen** zeigt zuerst die Hauptklassen und danach die Gruppen. Jahrgänge lassen sich gesammelt ausblenden. Gruppen ohne Zuordnung können in der Tabelle ausgeblendet werden.
 - In der Spalte **Anzeigen** schaltet ein Klick in die Zelle die Klasse oder Gruppe auf dem Board ein oder aus. Der **Eigene Anzeigename** ersetzt das Fachkürzel. Bei leerem Feld wird das Fachkürzel angezeigt.
 - Das Board übernimmt das Zeitraster täglich aus beste.schule. Sobald eine Stunde endet, wechselt die grüne Markierung zur nächsten Stunde. Ohne Zeitraster zeigt das Board den Plan ohne Zeitmarkierung.
-- Unter **Anzeige & PDFs** lassen sich der Wechsel zwischen Jahrgängen und die Dauer der PDF-Anzeige einstellen. Ein Dateiname wie `01122026-18122026.pdf` begrenzt einen Aushang auf diesen Zeitraum einschließlich beider Tage.
+- Unter **Anzeige & PDFs** lassen sich die sichtbaren Stunden (0 bis 10, voreingestellt sind 1 bis 8), die Infobreite in Prozent der Bildschirmbreite und die Dauer der PDF-Anzeige einstellen. Die beiden Schultage stehen übereinander, ihre Jahrgänge nebeneinander. Ein Dateiname wie `01122026-18122026.pdf` begrenzt einen Aushang auf diesen Zeitraum einschließlich beider Tage.
 
 ## Datenabruf und lokale Speicherung
 

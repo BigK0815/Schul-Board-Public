@@ -20,7 +20,7 @@ CONFIG = ROOT / 'einstellungen.json'
 SERVICE = 'StundenplanBoard-beste.schule'
 ACCOUNT = 'api-token'
 DEFAULT = {'port':5000,'lan':False,'switch_seconds':15,
-           'course_seconds':4,'cutoff_hour':15,'start_grade':5,'display_rows':2,'pdf_folder':'','pdf_seconds':12,'group_mappings':{},'group_name_display':None,'group_custom_names':{},'hidden_groups':[],'hidden_grades':[],'show_unassigned':True,'school_name':'Musterschule','school_logo':'','automatic_group_mapping':False}
+           'course_seconds':4,'cutoff_hour':15,'start_grade':5,'display_rows':2,'info_width':33,'visible_periods':list(range(1, 9)),'pdf_folder':'','pdf_seconds':12,'group_mappings':{},'group_name_display':None,'group_custom_names':{},'hidden_groups':[],'hidden_grades':[],'show_unassigned':True,'school_name':'Musterschule','school_logo':'','automatic_group_mapping':False}
 
 def natural_name_key(name):
     normalized = name.casefold().translate(str.maketrans('äöü', 'aou'))
@@ -139,7 +139,7 @@ class Window:
             ('course_seconds','Kurse durchblättern (Sekunden)',[2,3,4,5,6,8]),
             ('cutoff_hour','Tageswechsel (Uhrzeit)',[12,13,14,15,16,17,18]),
             ('start_grade','Start-Jahrgang',[5,6,7,8,9,10]),
-            ('display_rows','Klassenstufen übereinander (Zeilen)',[1,2,3]),
+            ('display_rows','Jahrgänge nebeneinander',[1,2,3]),
             ('pdf_seconds','PDF-Seite anzeigen (Sekunden)',[5,8,10,12,15,20,30,45,60])]
         for i, (key, label, choices) in enumerate(entries):
             row = ttk.Frame(options, style='Card.TFrame')
@@ -149,8 +149,26 @@ class Window:
             self.values[key] = v
             ttk.Combobox(row, textvariable=v, values=choices,
                          state='readonly', width=12, style='Compact.TCombobox').pack(anchor='w')
+        width_row = ttk.Frame(options, style='Card.TFrame')
+        width_row.grid(row=len(entries)//2, column=len(entries)%2, sticky='ew', padx=(0, 8), pady=2)
+        ttk.Label(width_row, text='Infobreite (% der Bildschirmbreite)',
+                  style='Card.TLabel').pack(anchor='w')
+        self.values['info_width'] = tk.StringVar(value=str(self.config['info_width']))
+        ttk.Spinbox(width_row, from_=10, to=60, width=10,
+                    textvariable=self.values['info_width']).pack(anchor='w')
         options.columnconfigure(0, weight=1)
         options.columnconfigure(1, weight=1)
+        periods = card(settings, 'Stunden auf dem Board')
+        period_grid = ttk.Frame(periods, style='Card.TFrame')
+        period_grid.pack(fill='x')
+        self.visible_periods = {}
+        for number in range(11):
+            selected = tk.BooleanVar(value=number in self.config['visible_periods'])
+            self.visible_periods[number] = selected
+            ttk.Checkbutton(period_grid, text=f'{number}.', variable=selected,
+                            style='GroupName.TCheckbutton').grid(
+                row=number//6, column=number%6, sticky='w', padx=(0, 8), pady=2)
+
         pdf = card(settings, 'Infoboard-PDFs')
         ttk.Label(pdf, text='Ordner für Info-PDFs', style='Card.TLabel').pack(anchor='w')
         self.pdf_folder = tk.StringVar(value=str(self.config['pdf_folder']))
@@ -536,6 +554,12 @@ class Window:
             if cfg['pdf_folder']:
                 Path(cfg['pdf_folder']).mkdir(parents=True, exist_ok=True)
             if not 1024<=cfg['port']<=65535: raise ValueError('Port muss zwischen 1024 und 65535 liegen')
+            if not 10 <= cfg['info_width'] <= 60:
+                raise ValueError('Die Infobreite muss zwischen 10 und 60 Prozent liegen.')
+            cfg['visible_periods'] = [number for number, selected in self.visible_periods.items()
+                                      if selected.get()]
+            if not cfg['visible_periods']:
+                raise ValueError('Bitte mindestens eine Stunde für die Anzeige auswählen.')
             if cfg['display_rows'] not in (1,2,3): raise ValueError('Bitte 1, 2 oder 3 Zeilen wählen')
             if cfg['course_seconds']<1 or cfg['pdf_seconds']<2: raise ValueError('Ungültige Zeitangabe')
             if self.token.get().strip():
