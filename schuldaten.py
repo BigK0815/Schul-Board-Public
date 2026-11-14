@@ -11,6 +11,7 @@ from time import monotonic
 import requests
 
 BASE = 'https://beste.schule/api'
+# Historischer Datenordner: identisch mit verwaltung.py halten.
 CACHE_DIR = Path(os.environ.get('APPDATA', str(Path.home()))) / 'StundenplanBoard'
 SUBSTITUTION_SECONDS = 300
 
